@@ -5,7 +5,7 @@ from datetime import datetime
 
 # Railway fornece variáveis MYSQL* nativamente.
 # Lemos essas primeiro; se não existirem, usamos as DB_* (desenvolvimento local).
-host     = os.environ.get("MYSQLHOST")     or os.environ.get("DB_HOST", "localhost")
+host     = os.environ.get("MYSQLHOST")     or os.environ.get("DB_HOST", "mysql.railway.internal")
 user     = os.environ.get("MYSQLUSER")     or os.environ.get("DB_USER", "root")
 password = os.environ.get("MYSQLPASSWORD") or os.environ.get("DB_PASSWORD", "")
 db       = os.environ.get("MYSQLDATABASE") or os.environ.get("DB_NAME", "railway")
