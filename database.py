@@ -2,14 +2,24 @@ import os
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, Boolean, ForeignKey
 from sqlalchemy.orm import sessionmaker, declarative_base
 from datetime import datetime
+import os
+from urllib.parse import quote_plus
 
-# Railway fornece variáveis MYSQL* nativamente.
-# Lemos essas primeiro; se não existirem, usamos as DB_* (desenvolvimento local).
-host     = os.environ.get("MYSQLHOST")     or os.environ.get("DB_HOST", "localhost")
-user     = os.environ.get("MYSQLUSER")     or os.environ.get("DB_USER", "root")
-password = os.environ.get("MYSQLPASSWORD") or os.environ.get("DB_PASSWORD", "")
-db       = os.environ.get("MYSQLDATABASE") or os.environ.get("DB_NAME", "agendaos")
-port     = os.environ.get("MYSQLPORT")     or os.environ.get("DB_PORT", "3306")
+host = os.environ.get("MYSQLHOST") or os.environ.get("DB_HOST")
+user = os.environ.get("MYSQLUSER") or os.environ.get("DB_USER")
+password = os.environ.get("MYSQLPASSWORD") or os.environ.get("DB_PASSWORD")
+db = os.environ.get("MYSQLDATABASE") or os.environ.get("DB_NAME")
+port = os.environ.get("MYSQLPORT") or os.environ.get("DB_PORT") or "3306"
+
+if not port or not str(port).strip():
+    port = "3306"
+
+if not all([host, user, password, db]):
+    raise RuntimeError("Variáveis do banco incompletas.")
+
+password = quote_plus(password)
+
+URL = f"mysql+pymysql://{user}:{password}@{host}:{port}/{db}"
 
 URL = f"mysql+pymysql://{user}:{password}@{host}:{port}/{db}"
 
