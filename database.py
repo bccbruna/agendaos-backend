@@ -8,8 +8,10 @@ from datetime import datetime
 host     = os.environ.get("MYSQLHOST")     or os.environ.get("DB_HOST", "localhost")
 user     = os.environ.get("MYSQLUSER")     or os.environ.get("DB_USER", "root")
 password = os.environ.get("MYSQLPASSWORD") or os.environ.get("DB_PASSWORD", "")
-db       = os.environ.get("MYSQLDATABASE") or os.environ.get("DB_NAME", "agendaos")
+db       = os.environ.get("MYSQLDATABASE") or os.environ.get("DB_NAME", "railway")
 port     = os.environ.get("MYSQLPORT")     or os.environ.get("DB_PORT", "3306")
+if not port or str(port).startswith("$"):
+    port = "3306"
 
 URL = f"mysql+pymysql://{user}:{password}@{host}:{port}/{db}"
 
