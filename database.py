@@ -12,7 +12,8 @@ user     = os.getenv("DB_USER")
 password = os.getenv("DB_PASSWORD")
 name     = os.getenv("DB_NAME")
 
-URL = f"mysql+pymysql://{user}:{password}@{host}/{name}"
+port = os.getenv("DB_PORT", "3306")
+URL = f"mysql+pymysql://{user}:{password}@{host}:{port}/{name}"
 
 engine       = create_engine(URL)
 SessionLocal = sessionmaker(bind=engine)
