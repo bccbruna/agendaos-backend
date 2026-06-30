@@ -1,57 +1,55 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-from dotenv import load_dotenv
-from datetime import datetime
 import os
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, Boolean, ForeignKey
+from sqlalchemy.orm import sessionmaker, declarative_base
+from datetime import datetime
 
-load_dotenv()
+# Railway fornece variáveis MYSQL* nativamente.
+# Lemos essas primeiro; se não existirem, usamos as DB_* (desenvolvimento local).
+host     = os.environ.get("MYSQLHOST")     or os.environ.get("DB_HOST", "localhost")
+user     = os.environ.get("MYSQLUSER")     or os.environ.get("DB_USER", "root")
+password = os.environ.get("MYSQLPASSWORD") or os.environ.get("DB_PASSWORD", "")
+db       = os.environ.get("MYSQLDATABASE") or os.environ.get("DB_NAME", "agendaos")
+port     = os.environ.get("MYSQLPORT")     or os.environ.get("DB_PORT", "3306")
 
-host     = os.getenv("DB_HOST")
-user     = os.getenv("DB_USER")
-password = os.getenv("DB_PASSWORD")
-name     = os.getenv("DB_NAME")
-
-port = os.getenv("DB_PORT", "3306")
-URL = f"mysql+pymysql://{user}:{password}@{host}:{port}/{name}"
+URL = f"mysql+pymysql://{user}:{password}@{host}:{port}/{db}"
 
 engine       = create_engine(URL)
-SessionLocal = sessionmaker(bind=engine)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base         = declarative_base()
 
-# ── TABELAS ──────────────────────────────────────────────────
+def get_db():
+    db_session = SessionLocal()
+    try:
+        yield db_session
+    finally:
+        db_session.close()
+
 class Cliente(Base):
     __tablename__ = "clientes"
-    id         = Column(Integer, primary_key=True, index=True)
-    nome       = Column(String(100))
-    telefone   = Column(String(20))
-    email      = Column(String(100))
-    tipo       = Column(String(50))
-    criado_em  = Column(DateTime, default=datetime.now)
-class Usuario(Base):
-    __tablename__ = "usuarios"
-
-    id = Column(Integer, primary_key=True, index=True)
-    nome_negocio = Column(String(100))
-    email = Column(String(100), unique=True)
-    senha = Column(String(255))
-    primeiro_acesso = Column(Boolean, default=True)
+    id        = Column(Integer, primary_key=True, index=True)
+    nome      = Column(String(100))
+    telefone  = Column(String(20))
+    email     = Column(String(100))
+    tipo      = Column(String(50))
     criado_em = Column(DateTime, default=datetime.now)
+
 class Agendamento(Base):
     __tablename__ = "agendamentos"
     id         = Column(Integer, primary_key=True, index=True)
-    cliente_id = Column(Integer)
+    cliente_id = Column(Integer, ForeignKey("clientes.id"))
     servico    = Column(String(100))
     data       = Column(String(20))
-    hora       = Column(Integer)
-    status     = Column(String(20), default="confirmado")
-    obs        = Column(String(200))
+    hora       = Column(String(10))
+    status     = Column(String(20), default="pending")
+    obs        = Column(String(500))
     preco      = Column(Float)
     criado_em  = Column(DateTime, default=datetime.now)
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+class Usuario(Base):
+    __tablename__ = "usuarios"
+    id            = Column(Integer, primary_key=True, index=True)
+    nome_negocio  = Column(String(100))
+    email         = Column(String(100), unique=True)
+    senha         = Column(String(255))
+    primeiro_acesso = Column(Boolean, default=True)
+    criado_em     = Column(DateTime, default=datetime.now)
