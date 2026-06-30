@@ -7,7 +7,7 @@ from datetime import datetime
 # Lemos essas primeiro; se não existirem, usamos as DB_* (desenvolvimento local).
 host     = os.environ.get("MYSQLHOST")     or os.environ.get("DB_HOST", "mysql.railway.internal")
 user     = os.environ.get("MYSQLUSER")     or os.environ.get("DB_USER", "root")
-password = os.environ.get("MYSQLPASSWORD") or os.environ.get("DB_PASSWORD", "")
+password = os.environ.get("MYSQLPASSWORD") or os.environ.get("DB_PASSWORD", "PZrRPTGpisyMDYoLDFWDlImoBHydrKFl")
 db       = os.environ.get("MYSQLDATABASE") or os.environ.get("DB_NAME", "railway")
 port     = os.environ.get("MYSQLPORT")     or os.environ.get("DB_PORT", "3306")
 if not port or str(port).startswith("$"):
