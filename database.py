@@ -5,14 +5,14 @@ from datetime import datetime
 
 # Railway fornece variáveis MYSQL* nativamente.
 # Lemos essas primeiro; se não existirem, usamos as DB_* (desenvolvimento local).
+from dotenv import load_dotenv
+load_dotenv()
+
 host = os.environ.get("MYSQLHOST") or os.environ.get("DB_HOST")
 user = os.environ.get("MYSQLUSER") or os.environ.get("DB_USER")
 password = os.environ.get("MYSQLPASSWORD") or os.environ.get("DB_PASSWORD")
 db = os.environ.get("MYSQLDATABASE") or os.environ.get("DB_NAME")
 port = os.environ.get("MYSQLPORT") or os.environ.get("DB_PORT") or "3306"
-if not port or str(port).startswith("$"):
-    port = "3306"
-
 URL = f"mysql+pymysql://{user}:{password}@{host}:{port}/{db}"
 
 engine       = create_engine(URL)
