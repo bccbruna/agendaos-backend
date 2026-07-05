@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from database import engine, Base, get_db, Cliente, Agendamento, Usuario
+from database import engine, Base, get_db, Cliente, Agendamento, Usuario, Servico
 from pydantic import BaseModel
 from typing import Optional
 
@@ -170,6 +170,39 @@ def servicos_publicos(db: Session = Depends(get_db)):
         {"id":5,  "name":"Corte Feminino",      "duration":60,  "price":80},
         {"id":6,  "name":"Escova Progressiva",  "duration":180, "price":350},
     ]
+# ── SERVIÇOS ──────────────────────────────────────────────────
+class ServicoSchema(BaseModel):
+    nome: str
+    duracao: int
+    preco: float
+    categoria: Optional[str] = "barber"
+
+@app.get("/servicos")
+def listar_servicos(db: Session = Depends(get_db)):
+    return db.query(Servico).all()
+
+@app.post("/servicos")
+def criar_servico(s: ServicoSchema, db: Session = Depends(get_db)):
+    servico = Servico(**s.model_dump())
+    db.add(servico)
+    db.commit()
+    db.refresh(servico)
+    return servico
+
+@app.put("/servicos/{id}")
+def atualizar_servico(id: int, s: ServicoSchema, db: Session = Depends(get_db)):
+    servico = db.query(Servico).filter(Servico.id == id).first()
+    for k, v in s.model_dump().items():
+        setattr(servico, k, v)
+    db.commit()
+    return servico
+
+@app.delete("/servicos/{id}")
+def deletar_servico(id: int, db: Session = Depends(get_db)):
+    servico = db.query(Servico).filter(Servico.id == id).first()
+    db.delete(servico)
+    db.commit()
+    return {"ok": True}
 @app.get("/")
 def root():
     return {"status": "AgendaOS API rodando!"}

@@ -19,7 +19,10 @@ if not all([host, user, password, db]):
 
 password = quote_plus(password)
 
-URL = f"mysql+pymysql://{user}:{password}@{host}:{port}/{db}"
+print("HOST:", host)
+print("PORT:", port)
+print("USER:", user)
+print("DB:", db)
 
 URL = f"mysql+pymysql://{user}:{password}@{host}:{port}/{db}"
 
@@ -54,7 +57,14 @@ class Agendamento(Base):
     obs        = Column(String(500))
     preco      = Column(Float)
     criado_em  = Column(DateTime, default=datetime.now)
-
+class Servico(Base):
+    __tablename__ = "servicos"
+    id        = Column(Integer, primary_key=True, index=True)
+    nome      = Column(String(100))
+    duracao   = Column(Integer)
+    preco     = Column(Float)
+    categoria = Column(String(50), default="barber")
+    criado_em = Column(DateTime, default=datetime.now)
 class Usuario(Base):
     __tablename__ = "usuarios"
     id            = Column(Integer, primary_key=True, index=True)
