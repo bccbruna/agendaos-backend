@@ -46,6 +46,7 @@ def criar_cliente(c: ClienteSchema, db: Session = Depends(get_db)):
 
 @app.delete("/clientes/{id}")
 def deletar_cliente(id: int, db: Session = Depends(get_db)):
+    db.query(Agendamento).filter(Agendamento.cliente_id == id).delete()
     cliente = db.query(Cliente).filter(Cliente.id == id).first()
     db.delete(cliente)
     db.commit()
