@@ -39,10 +39,18 @@ class AgendamentoSchema(BaseModel):
     obs:        Optional[str] = ""
     preco:      Optional[float] = 0.0
 
+
 # ── CLIENTES ──────────────────────────────────────────────────
 @app.get("/clientes")
 def listar_clientes(db: Session = Depends(get_db)):
     return db.query(Cliente).all()
+
+@app.get("/clientes/buscar")
+def buscar_cliente_por_telefone(telefone: str, db: Session = Depends(get_db)):
+    cliente = db.query(Cliente).filter(Cliente.telefone == telefone).first()
+    if cliente:
+        return cliente
+    return None
 
 @app.post("/clientes")
 def criar_cliente(c: ClienteSchema, db: Session = Depends(get_db)):
