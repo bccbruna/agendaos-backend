@@ -5,6 +5,14 @@ from database import engine, Base, get_db, Cliente, Agendamento, Usuario, Servic
 from pydantic import BaseModel
 from typing import Optional
 
+import bcrypt
+
+def hash_senha(senha: str) -> str:
+    return bcrypt.hashpw(senha.encode(), bcrypt.gensalt()).decode()
+
+def verificar_senha(senha: str, hash: str) -> bool:
+    return bcrypt.checkpw(senha.encode(), hash.encode())
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="AgendaOS API")
@@ -126,7 +134,7 @@ def criar_usuario(u: CriarUsuarioSchema, db: Session = Depends(get_db)):
     novo = Usuario(
         nome_negocio=u.nome_negocio,
         email=u.email,
-        senha=u.senha,
+        senha=hash_senha(u.senha),
         primeiro_acesso=True
     )
     db.add(novo)
@@ -138,7 +146,7 @@ def criar_usuario(u: CriarUsuarioSchema, db: Session = Depends(get_db)):
 @app.post("/login")
 def login(dados: LoginSchema, db: Session = Depends(get_db)):
     usuario = db.query(Usuario).filter(Usuario.email == dados.email).first()
-    if not usuario or usuario.senha != dados.senha:
+    if not usuario or not verificar_senha(dados.senha, usuario.senha):
         return {"ok": False, "erro": "Email ou senha incorretos"}
     
     return {
@@ -152,10 +160,14 @@ def login(dados: LoginSchema, db: Session = Depends(get_db)):
 @app.post("/trocar-senha")
 def trocar_senha(dados: TrocarSenhaSchema, db: Session = Depends(get_db)):
     usuario = db.query(Usuario).filter(Usuario.email == dados.email).first()
-    if not usuario or usuario.senha != dados.senha_atual:
-        return {"ok": False, "erro": "Senha atual incorreta"}
+    if not usuario:
+        return {"ok": False, "erro": "Usuário não encontrado"}
     
-    usuario.senha = dados.senha_nova
+    if not usuario.primeiro_acesso:
+        if not verificar_senha(dados.senha_atual, usuario.senha):
+            return {"ok": False, "erro": "Senha atual incorreta"}
+    
+    usuario.senha = hash_senha(dados.senha_nova)
     usuario.primeiro_acesso = False
     db.commit()
     return {"ok": True}
