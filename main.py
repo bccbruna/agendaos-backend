@@ -13,6 +13,27 @@ def hash_senha(senha: str) -> str:
 def verificar_senha(senha: str, hash: str) -> bool:
     return bcrypt.checkpw(senha.encode(), hash.encode())
 
+from jose import JWTError, jwt
+from datetime import datetime, timedelta
+import secrets
+
+SECRET_KEY = "agendaos-secret-key-2024-mude-em-producao"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 horas
+
+def criar_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.now() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+def verificar_token(token: str):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except JWTError:
+        return None
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="AgendaOS API")
@@ -157,8 +178,11 @@ def login(dados: LoginSchema, db: Session = Depends(get_db)):
     if not usuario or not verificar_senha(dados.senha, usuario.senha):
         return {"ok": False, "erro": "Email ou senha incorretos"}
     
+    token = criar_token({"sub": usuario.email})
+    
     return {
         "ok": True,
+        "token": token,
         "primeiro_acesso": usuario.primeiro_acesso,
         "nome_negocio": usuario.nome_negocio,
         "email": usuario.email
