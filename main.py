@@ -88,6 +88,55 @@ class ServicoSchema(BaseModel):
     preco: float
     categoria: Optional[str] = "barber"
 
+@app.get("/horarios-disponiveis")
+def horarios_disponiveis(data: str, servico_id: int, db: Session = Depends(get_db)):
+    servico = db.query(Servico).filter(Servico.id == servico_id).first()
+    if not servico:
+        return []
+    
+    duracao_slots = (servico.duracao + 29) // 30  # quantos slots de 30min ocupa
+    agendamentos = db.query(Agendamento).filter(
+        Agendamento.data == data,
+        Agendamento.status != "cancelled"
+    ).all()
+    
+    # Monta lista de slots ocupados (cada hora tem 2 slots: :00 e :30)
+    slots_ocupados = set()
+    for ag in agendamentos:
+        s = db.query(Servico).filter(Servico.nome == ag.servico).first()
+        dur = s.duracao if s else 30
+        n_slots = (dur + 29) // 30
+        hora = int(ag.hora)
+        minuto = 0
+        for i in range(n_slots):
+            slots_ocupados.add((hora, minuto))
+            minuto += 30
+            if minuto >= 60:
+                minuto = 0
+                hora += 1
+    
+    # Gera horários disponíveis das 8h às 18h em slots de 30min
+    horarios = []
+    for h in range(8, 19):
+        for m in [0, 30]:
+            # Verifica se todos os slots necessários estão livres
+            disponivel = True
+            hora_check = h
+            min_check = m
+            for i in range(duracao_slots):
+                if (hora_check, min_check) in slots_ocupados:
+                    disponivel = False
+                    break
+                min_check += 30
+                if min_check >= 60:
+                    min_check = 0
+                    hora_check += 1
+            
+            if disponivel and (h < 18 or (h == 18 and m == 0)):
+                horarios.append(f"{h:02d}:{m:02d}")
+    
+    return horarios
+
 # ── CLIENTES ──────────────────────────────────────────────────
 @app.get("/clientes")
 def listar_clientes(db: Session = Depends(get_db), user=Depends(get_current_user)):
