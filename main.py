@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, Header, HTTPException
+from fastapi import FastAPI, Depends, Header, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -89,7 +89,7 @@ def enviar_email_recuperacao(destinatario: str, token: str):
   </body>
 </html>
 """, subtype="html")
-    with smtplib.SMTP("smtp.gmail.com", 587) as server:
+    with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as server:
         server.starttls()
         server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
         server.send_message(msg)
@@ -290,18 +290,21 @@ def login(dados: LoginSchema, db: Session = Depends(get_db)):
         "email": usuario.email
     }
 
+def enviar_email_recuperacao_seguro(destinatario: str, token: str):
+    try:
+        enviar_email_recuperacao(destinatario, token)
+    except Exception as e:
+        print("Erro ao enviar email de recuperação:", e)
+
 @app.post("/esqueci-senha")
-def esqueci_senha(dados: EsqueciSenhaSchema, db: Session = Depends(get_db)):
+def esqueci_senha(dados: EsqueciSenhaSchema, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     usuario = db.query(Usuario).filter(Usuario.email == dados.email).first()
     if usuario:
         token = secrets.token_urlsafe(32)
         usuario.reset_token = token
         usuario.reset_token_expira = datetime.now() + timedelta(hours=1)
         db.commit()
-        try:
-            enviar_email_recuperacao(usuario.email, token)
-        except Exception as e:
-            print("Erro ao enviar email de recuperação:", e)
+        background_tasks.add_task(enviar_email_recuperacao_seguro, usuario.email, token)
     # Sempre retorna ok, mesmo se o email não existir (evita revelar quais emails estão cadastrados)
     return {"ok": True}
 
