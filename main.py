@@ -8,8 +8,7 @@ from typing import Optional
 import bcrypt
 import os
 import secrets
-import smtplib
-from email.message import EmailMessage
+import requests
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 
@@ -48,23 +47,13 @@ def get_current_user(authorization: Optional[str] = Header(None)):
     return payload
 
 # ── EMAIL (recuperação de senha) ───────────────────────────────
-GMAIL_USER = os.environ.get("GMAIL_USER")
-GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
+SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
+EMAIL_REMETENTE = os.environ.get("EMAIL_REMETENTE", "naoresponda.agendaos@gmail.com")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://agendaos-frontend.vercel.app")
 
 def enviar_email_recuperacao(destinatario: str, token: str):
     link = f"{FRONTEND_URL}/redefinir-senha?token={token}"
-    msg = EmailMessage()
-    msg["Subject"] = "Recuperação de senha - AgendaOS"
-    msg["From"] = GMAIL_USER
-    msg["To"] = destinatario
-    msg.set_content(
-        "Olá!\n\n"
-        "Recebemos um pedido para redefinir sua senha no AgendaOS.\n\n"
-        f"Clique no link abaixo para criar uma nova senha (válido por 1 hora):\n{link}\n\n"
-        "Se você não pediu isso, pode ignorar este email."
-    )
-    msg.add_alternative(f"""\
+    html = f"""\
 <html>
   <body style="font-family: Arial, sans-serif; background:#08090F; padding:32px; color:#F0F0F8;">
     <div style="max-width:420px; margin:0 auto; background:#131620; border-radius:16px; padding:32px; border:1px solid rgba(255,255,255,0.07);">
@@ -88,11 +77,31 @@ def enviar_email_recuperacao(destinatario: str, token: str):
     </div>
   </body>
 </html>
-""", subtype="html")
-    with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as server:
-        server.starttls()
-        server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-        server.send_message(msg)
+"""
+    texto = (
+        "Olá!\n\n"
+        "Recebemos um pedido para redefinir sua senha no AgendaOS.\n\n"
+        f"Clique no link abaixo para criar uma nova senha (válido por 1 hora):\n{link}\n\n"
+        "Se você não pediu isso, pode ignorar este email."
+    )
+    resp = requests.post(
+        "https://api.sendgrid.com/v3/mail/send",
+        headers={
+            "Authorization": f"Bearer {SENDGRID_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "personalizations": [{"to": [{"email": destinatario}]}],
+            "from": {"email": EMAIL_REMETENTE, "name": "AgendaOS"},
+            "subject": "Recuperação de senha - AgendaOS",
+            "content": [
+                {"type": "text/plain", "value": texto},
+                {"type": "text/html", "value": html},
+            ],
+        },
+        timeout=10,
+    )
+    resp.raise_for_status()
 
 # ── APP ───────────────────────────────────────────────────────
 Base.metadata.create_all(bind=engine)
