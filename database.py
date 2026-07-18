@@ -4,6 +4,9 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from datetime import datetime
 import os
 from urllib.parse import quote_plus
+from dotenv import load_dotenv
+
+load_dotenv()
 
 host = os.environ.get("MYSQLHOST") or os.environ.get("DB_HOST")
 user = os.environ.get("MYSQLUSER") or os.environ.get("DB_USER")
@@ -72,4 +75,6 @@ class Usuario(Base):
     email         = Column(String(100), unique=True)
     senha         = Column(String(255))
     primeiro_acesso = Column(Boolean, default=True)
+    reset_token       = Column(String(255), nullable=True)
+    reset_token_expira = Column(DateTime, nullable=True)
     criado_em     = Column(DateTime, default=datetime.now)

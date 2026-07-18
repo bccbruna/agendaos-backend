@@ -1,10 +1,15 @@
 from fastapi import FastAPI, Depends, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from database import engine, Base, get_db, Cliente, Agendamento, Usuario, Servico
 from pydantic import BaseModel
 from typing import Optional
 import bcrypt
+import os
+import secrets
+import smtplib
+from email.message import EmailMessage
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 
@@ -42,8 +47,68 @@ def get_current_user(authorization: Optional[str] = Header(None)):
         raise HTTPException(status_code=401, detail="Token expirado ou inválido")
     return payload
 
+# ── EMAIL (recuperação de senha) ───────────────────────────────
+GMAIL_USER = os.environ.get("GMAIL_USER")
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://agendaos-frontend.vercel.app")
+
+def enviar_email_recuperacao(destinatario: str, token: str):
+    link = f"{FRONTEND_URL}/redefinir-senha?token={token}"
+    msg = EmailMessage()
+    msg["Subject"] = "Recuperação de senha - AgendaOS"
+    msg["From"] = GMAIL_USER
+    msg["To"] = destinatario
+    msg.set_content(
+        "Olá!\n\n"
+        "Recebemos um pedido para redefinir sua senha no AgendaOS.\n\n"
+        f"Clique no link abaixo para criar uma nova senha (válido por 1 hora):\n{link}\n\n"
+        "Se você não pediu isso, pode ignorar este email."
+    )
+    msg.add_alternative(f"""\
+<html>
+  <body style="font-family: Arial, sans-serif; background:#08090F; padding:32px; color:#F0F0F8;">
+    <div style="max-width:420px; margin:0 auto; background:#131620; border-radius:16px; padding:32px; border:1px solid rgba(255,255,255,0.07);">
+      <h2 style="margin:0 0 16px; font-size:20px;">Agenda<span style="color:#A855F7;">OS</span></h2>
+      <p style="font-size:14px; line-height:1.6; color:rgba(240,240,248,0.7);">Olá!</p>
+      <p style="font-size:14px; line-height:1.6; color:rgba(240,240,248,0.7);">
+        Recebemos um pedido para redefinir sua senha. Clique no botão abaixo para criar uma nova senha (válido por 1 hora):
+      </p>
+      <p style="text-align:center; margin:28px 0;">
+        <a href="{link}" style="background:linear-gradient(135deg,#A855F7,#7C3AED); color:#fff; padding:12px 28px;
+          border-radius:10px; text-decoration:none; font-weight:bold; font-size:14px; display:inline-block;">
+          Redefinir minha senha
+        </a>
+      </p>
+      <p style="font-size:12px; color:rgba(240,240,248,0.44); word-break:break-all;">
+        Ou copie e cole este link no navegador:<br>{link}
+      </p>
+      <p style="font-size:12px; color:rgba(240,240,248,0.44); margin-top:20px;">
+        Se você não pediu isso, pode ignorar este email.
+      </p>
+    </div>
+  </body>
+</html>
+""", subtype="html")
+    with smtplib.SMTP("smtp.gmail.com", 587) as server:
+        server.starttls()
+        server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+        server.send_message(msg)
+
 # ── APP ───────────────────────────────────────────────────────
 Base.metadata.create_all(bind=engine)
+
+# create_all não altera tabelas já existentes; garante as colunas de reset em produção
+def garantir_colunas_reset_senha():
+    with engine.connect() as conn:
+        for coluna, tipo in [("reset_token", "VARCHAR(255)"), ("reset_token_expira", "DATETIME")]:
+            try:
+                conn.execute(text(f"ALTER TABLE usuarios ADD COLUMN {coluna} {tipo} NULL"))
+                conn.commit()
+            except Exception:
+                pass  # coluna já existe
+
+garantir_colunas_reset_senha()
+
 app = FastAPI(title="AgendaOS API")
 app.add_middleware(
     CORSMiddleware,
@@ -80,6 +145,13 @@ class CriarUsuarioSchema(BaseModel):
 class TrocarSenhaSchema(BaseModel):
     email: str
     senha_atual: str
+    senha_nova: str
+
+class EsqueciSenhaSchema(BaseModel):
+    email: str
+
+class RedefinirSenhaSchema(BaseModel):
+    token: str
     senha_nova: str
 
 class ServicoSchema(BaseModel):
@@ -217,6 +289,33 @@ def login(dados: LoginSchema, db: Session = Depends(get_db)):
         "nome_negocio": usuario.nome_negocio,
         "email": usuario.email
     }
+
+@app.post("/esqueci-senha")
+def esqueci_senha(dados: EsqueciSenhaSchema, db: Session = Depends(get_db)):
+    usuario = db.query(Usuario).filter(Usuario.email == dados.email).first()
+    if usuario:
+        token = secrets.token_urlsafe(32)
+        usuario.reset_token = token
+        usuario.reset_token_expira = datetime.now() + timedelta(hours=1)
+        db.commit()
+        try:
+            enviar_email_recuperacao(usuario.email, token)
+        except Exception as e:
+            print("Erro ao enviar email de recuperação:", e)
+    # Sempre retorna ok, mesmo se o email não existir (evita revelar quais emails estão cadastrados)
+    return {"ok": True}
+
+@app.post("/redefinir-senha")
+def redefinir_senha(dados: RedefinirSenhaSchema, db: Session = Depends(get_db)):
+    usuario = db.query(Usuario).filter(Usuario.reset_token == dados.token).first()
+    if not usuario or not usuario.reset_token_expira or usuario.reset_token_expira < datetime.now():
+        return {"ok": False, "erro": "Link inválido ou expirado"}
+    usuario.senha = hash_senha(dados.senha_nova)
+    usuario.reset_token = None
+    usuario.reset_token_expira = None
+    usuario.primeiro_acesso = False
+    db.commit()
+    return {"ok": True}
 
 @app.post("/trocar-senha")
 def trocar_senha(dados: TrocarSenhaSchema, db: Session = Depends(get_db)):
