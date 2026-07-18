@@ -302,8 +302,9 @@ def login(dados: LoginSchema, db: Session = Depends(get_db)):
 def enviar_email_recuperacao_seguro(destinatario: str, token: str):
     try:
         enviar_email_recuperacao(destinatario, token)
+        print("Email de recuperação enviado para", destinatario, flush=True)
     except Exception as e:
-        print("Erro ao enviar email de recuperação:", e)
+        print("Erro ao enviar email de recuperação:", e, flush=True)
 
 @app.post("/esqueci-senha")
 def esqueci_senha(dados: EsqueciSenhaSchema, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
