@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, Header, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from database import engine, Base, get_db, Cliente, Agendamento, Usuario, Servico
+from database import engine, Base, get_db, Cliente, Agendamento, Usuario, Servico, Profissional
 from pydantic import BaseModel
 from typing import Optional
 import bcrypt
@@ -106,17 +106,18 @@ def enviar_email_recuperacao(destinatario: str, token: str):
 # ── APP ───────────────────────────────────────────────────────
 Base.metadata.create_all(bind=engine)
 
-# create_all não altera tabelas já existentes; garante as colunas de reset em produção
-def garantir_colunas_reset_senha():
+# create_all não altera tabelas já existentes; garante as colunas novas em produção
+def garantir_coluna(tabela: str, coluna: str, tipo: str):
     with engine.connect() as conn:
-        for coluna, tipo in [("reset_token", "VARCHAR(255)"), ("reset_token_expira", "DATETIME")]:
-            try:
-                conn.execute(text(f"ALTER TABLE usuarios ADD COLUMN {coluna} {tipo} NULL"))
-                conn.commit()
-            except Exception:
-                pass  # coluna já existe
+        try:
+            conn.execute(text(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo} NULL"))
+            conn.commit()
+        except Exception:
+            pass  # coluna já existe
 
-garantir_colunas_reset_senha()
+garantir_coluna("usuarios", "reset_token", "VARCHAR(255)")
+garantir_coluna("usuarios", "reset_token_expira", "DATETIME")
+garantir_coluna("agendamentos", "profissional_id", "INTEGER")
 
 app = FastAPI(title="AgendaOS API")
 app.add_middleware(
@@ -135,6 +136,7 @@ class ClienteSchema(BaseModel):
 
 class AgendamentoSchema(BaseModel):
     cliente_id: int
+    profissional_id: Optional[int] = None
     servico:    str
     data:       str
     hora:       int
@@ -169,17 +171,25 @@ class ServicoSchema(BaseModel):
     preco: float
     categoria: Optional[str] = "barber"
 
+class ProfissionalSchema(BaseModel):
+    nome: str
+    especialidade: Optional[str] = ""
+    ativo: Optional[bool] = True
+
 @app.get("/horarios-disponiveis")
-def horarios_disponiveis(data: str, servico_id: int, db: Session = Depends(get_db)):
+def horarios_disponiveis(data: str, servico_id: int, profissional_id: Optional[int] = None, db: Session = Depends(get_db)):
     servico = db.query(Servico).filter(Servico.id == servico_id).first()
     if not servico:
         return []
-    
+
     duracao_slots = (servico.duracao + 29) // 30  # quantos slots de 30min ocupa
-    agendamentos = db.query(Agendamento).filter(
+    query = db.query(Agendamento).filter(
         Agendamento.data == data,
         Agendamento.status != "cancelled"
-    ).all()
+    )
+    if profissional_id:
+        query = query.filter(Agendamento.profissional_id == profissional_id)
+    agendamentos = query.all()
     
     # Monta lista de slots ocupados (cada hora tem 2 slots: :00 e :30)
     slots_ocupados = set()
@@ -368,6 +378,34 @@ def atualizar_servico(id: int, s: ServicoSchema, db: Session = Depends(get_db), 
 def deletar_servico(id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     servico = db.query(Servico).filter(Servico.id == id).first()
     db.delete(servico)
+    db.commit()
+    return {"ok": True}
+
+# ── PROFISSIONAIS ─────────────────────────────────────────────
+@app.get("/profissionais")
+def listar_profissionais(db: Session = Depends(get_db)):
+    return db.query(Profissional).filter(Profissional.ativo == True).all()
+
+@app.post("/profissionais")
+def criar_profissional(p: ProfissionalSchema, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    profissional = Profissional(**p.model_dump())
+    db.add(profissional)
+    db.commit()
+    db.refresh(profissional)
+    return profissional
+
+@app.put("/profissionais/{id}")
+def atualizar_profissional(id: int, p: ProfissionalSchema, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    profissional = db.query(Profissional).filter(Profissional.id == id).first()
+    for k, v in p.model_dump().items():
+        setattr(profissional, k, v)
+    db.commit()
+    return profissional
+
+@app.delete("/profissionais/{id}")
+def deletar_profissional(id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    profissional = db.query(Profissional).filter(Profissional.id == id).first()
+    db.delete(profissional)
     db.commit()
     return {"ok": True}
 

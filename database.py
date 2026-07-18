@@ -53,6 +53,7 @@ class Agendamento(Base):
     __tablename__ = "agendamentos"
     id         = Column(Integer, primary_key=True, index=True)
     cliente_id = Column(Integer, ForeignKey("clientes.id"))
+    profissional_id = Column(Integer, ForeignKey("profissionais.id"), nullable=True)
     servico    = Column(String(100))
     data       = Column(String(20))
     hora       = Column(String(10))
@@ -60,6 +61,14 @@ class Agendamento(Base):
     obs        = Column(String(500))
     preco      = Column(Float)
     criado_em  = Column(DateTime, default=datetime.now)
+
+class Profissional(Base):
+    __tablename__ = "profissionais"
+    id           = Column(Integer, primary_key=True, index=True)
+    nome         = Column(String(100))
+    especialidade = Column(String(100), nullable=True)
+    ativo        = Column(Boolean, default=True)
+    criado_em    = Column(DateTime, default=datetime.now)
 class Servico(Base):
     __tablename__ = "servicos"
     id        = Column(Integer, primary_key=True, index=True)
