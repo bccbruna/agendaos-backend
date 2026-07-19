@@ -43,6 +43,7 @@ def get_db():
 class Cliente(Base):
     __tablename__ = "clientes"
     id        = Column(Integer, primary_key=True, index=True)
+    dono_id   = Column(Integer, ForeignKey("usuarios.id"), nullable=True)
     nome      = Column(String(100))
     telefone  = Column(String(20))
     email     = Column(String(100))
@@ -52,6 +53,7 @@ class Cliente(Base):
 class Agendamento(Base):
     __tablename__ = "agendamentos"
     id         = Column(Integer, primary_key=True, index=True)
+    dono_id    = Column(Integer, ForeignKey("usuarios.id"), nullable=True)
     cliente_id = Column(Integer, ForeignKey("clientes.id"))
     profissional_id = Column(Integer, ForeignKey("profissionais.id"), nullable=True)
     servico    = Column(String(100))
@@ -65,6 +67,7 @@ class Agendamento(Base):
 class Profissional(Base):
     __tablename__ = "profissionais"
     id           = Column(Integer, primary_key=True, index=True)
+    dono_id      = Column(Integer, ForeignKey("usuarios.id"), nullable=True)
     nome         = Column(String(100))
     especialidade = Column(String(100), nullable=True)
     ativo        = Column(Boolean, default=True)
@@ -72,6 +75,7 @@ class Profissional(Base):
 class Servico(Base):
     __tablename__ = "servicos"
     id        = Column(Integer, primary_key=True, index=True)
+    dono_id   = Column(Integer, ForeignKey("usuarios.id"), nullable=True)
     nome      = Column(String(100))
     duracao   = Column(Integer)
     preco     = Column(Float)
@@ -81,6 +85,7 @@ class Usuario(Base):
     __tablename__ = "usuarios"
     id            = Column(Integer, primary_key=True, index=True)
     nome_negocio  = Column(String(100))
+    slug          = Column(String(120), unique=True, nullable=True)
     email         = Column(String(100), unique=True)
     senha         = Column(String(255))
     primeiro_acesso = Column(Boolean, default=True)

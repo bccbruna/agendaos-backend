@@ -7,6 +7,8 @@ from pydantic import BaseModel
 from typing import Optional
 import bcrypt
 import os
+import re
+import unicodedata
 import secrets
 import requests
 from jose import JWTError, jwt
@@ -45,6 +47,32 @@ def get_current_user(authorization: Optional[str] = Header(None)):
     if not payload:
         raise HTTPException(status_code=401, detail="Token expirado ou inválido")
     return payload
+
+# ── MULTI-TENANT (dono_id) ─────────────────────────────────────
+def gerar_slug(nome: str, db: Session) -> str:
+    texto = unicodedata.normalize("NFKD", nome or "").encode("ascii", "ignore").decode("ascii")
+    texto = re.sub(r"[^a-zA-Z0-9]+", "-", texto).strip("-").lower()
+    if not texto:
+        texto = "negocio"
+    slug = texto
+    contador = 2
+    while db.query(Usuario).filter(Usuario.slug == slug).first():
+        slug = f"{texto}-{contador}"
+        contador += 1
+    return slug
+
+def resolver_dono_id(authorization: Optional[str], dono_id: Optional[int] = None) -> Optional[int]:
+    if authorization and authorization.startswith("Bearer "):
+        payload = verificar_token(authorization.split(" ")[1])
+        if payload and payload.get("dono_id"):
+            return payload["dono_id"]
+    return dono_id
+
+def exigir_dono_id(authorization: Optional[str], dono_id: Optional[int] = None) -> int:
+    resolvido = resolver_dono_id(authorization, dono_id)
+    if not resolvido:
+        raise HTTPException(status_code=400, detail="Autenticação ou dono_id obrigatório")
+    return resolvido
 
 # ── EMAIL (recuperação de senha) ───────────────────────────────
 SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
@@ -118,6 +146,11 @@ def garantir_coluna(tabela: str, coluna: str, tipo: str):
 garantir_coluna("usuarios", "reset_token", "VARCHAR(255)")
 garantir_coluna("usuarios", "reset_token_expira", "DATETIME")
 garantir_coluna("agendamentos", "profissional_id", "INTEGER")
+garantir_coluna("usuarios", "slug", "VARCHAR(120)")
+garantir_coluna("clientes", "dono_id", "INTEGER")
+garantir_coluna("agendamentos", "dono_id", "INTEGER")
+garantir_coluna("servicos", "dono_id", "INTEGER")
+garantir_coluna("profissionais", "dono_id", "INTEGER")
 
 app = FastAPI(title="AgendaOS API")
 app.add_middleware(
@@ -177,14 +210,18 @@ class ProfissionalSchema(BaseModel):
     ativo: Optional[bool] = True
 
 @app.get("/horarios-disponiveis")
-def horarios_disponiveis(data: str, servico_id: int, profissional_id: Optional[int] = None, db: Session = Depends(get_db)):
-    servico = db.query(Servico).filter(Servico.id == servico_id).first()
+def horarios_disponiveis(data: str, servico_id: int, profissional_id: Optional[int] = None,
+                          dono_id: Optional[int] = None, authorization: Optional[str] = Header(None),
+                          db: Session = Depends(get_db)):
+    dono_id = exigir_dono_id(authorization, dono_id)
+    servico = db.query(Servico).filter(Servico.id == servico_id, Servico.dono_id == dono_id).first()
     if not servico:
         return []
 
     duracao_slots = (servico.duracao + 29) // 30  # quantos slots de 30min ocupa
     query = db.query(Agendamento).filter(
         Agendamento.data == data,
+        Agendamento.dono_id == dono_id,
         Agendamento.status != "cancelled"
     )
     if profissional_id:
@@ -194,7 +231,7 @@ def horarios_disponiveis(data: str, servico_id: int, profissional_id: Optional[i
     # Monta lista de slots ocupados (cada hora tem 2 slots: :00 e :30)
     slots_ocupados = set()
     for ag in agendamentos:
-        s = db.query(Servico).filter(Servico.nome == ag.servico).first()
+        s = db.query(Servico).filter(Servico.nome == ag.servico, Servico.dono_id == dono_id).first()
         dur = s.duracao if s else 30
         n_slots = (dur + 29) // 30
         hora = int(ag.hora)
@@ -231,16 +268,17 @@ def horarios_disponiveis(data: str, servico_id: int, profissional_id: Optional[i
 # ── CLIENTES ──────────────────────────────────────────────────
 @app.get("/clientes")
 def listar_clientes(db: Session = Depends(get_db), user=Depends(get_current_user)):
-    return db.query(Cliente).all()
+    return db.query(Cliente).filter(Cliente.dono_id == user["dono_id"]).all()
 
 @app.get("/clientes/buscar")
-def buscar_cliente_por_telefone(telefone: str, db: Session = Depends(get_db)):
-    cliente = db.query(Cliente).filter(Cliente.telefone == telefone).first()
+def buscar_cliente_por_telefone(telefone: str, dono_id: int, db: Session = Depends(get_db)):
+    cliente = db.query(Cliente).filter(Cliente.telefone == telefone, Cliente.dono_id == dono_id).first()
     return cliente
 
 @app.post("/clientes")
-def criar_cliente(c: ClienteSchema, db: Session = Depends(get_db)):
-    cliente = Cliente(**c.model_dump())
+def criar_cliente(c: ClienteSchema, dono_id: Optional[int] = None, authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
+    dono_id = exigir_dono_id(authorization, dono_id)
+    cliente = Cliente(**c.model_dump(), dono_id=dono_id)
     db.add(cliente)
     db.commit()
     db.refresh(cliente)
@@ -248,20 +286,23 @@ def criar_cliente(c: ClienteSchema, db: Session = Depends(get_db)):
 
 @app.delete("/clientes/{id}")
 def deletar_cliente(id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    cliente = db.query(Cliente).filter(Cliente.id == id, Cliente.dono_id == user["dono_id"]).first()
+    if not cliente:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
     db.query(Agendamento).filter(Agendamento.cliente_id == id).delete()
-    cliente = db.query(Cliente).filter(Cliente.id == id).first()
     db.delete(cliente)
     db.commit()
     return {"ok": True}
 
 # ── AGENDAMENTOS ──────────────────────────────────────────────
 @app.get("/agendamentos")
-def listar_agendamentos(db: Session = Depends(get_db)):
-    return db.query(Agendamento).all()
+def listar_agendamentos(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    return db.query(Agendamento).filter(Agendamento.dono_id == user["dono_id"]).all()
 
 @app.post("/agendamentos")
-def criar_agendamento(a: AgendamentoSchema, db: Session = Depends(get_db)):
-    agendamento = Agendamento(**a.model_dump())
+def criar_agendamento(a: AgendamentoSchema, dono_id: Optional[int] = None, authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
+    dono_id = exigir_dono_id(authorization, dono_id)
+    agendamento = Agendamento(**a.model_dump(), dono_id=dono_id)
     db.add(agendamento)
     db.commit()
     db.refresh(agendamento)
@@ -269,14 +310,18 @@ def criar_agendamento(a: AgendamentoSchema, db: Session = Depends(get_db)):
 
 @app.put("/agendamentos/{id}/status")
 def atualizar_status(id: int, status: str, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    ag = db.query(Agendamento).filter(Agendamento.id == id).first()
+    ag = db.query(Agendamento).filter(Agendamento.id == id, Agendamento.dono_id == user["dono_id"]).first()
+    if not ag:
+        raise HTTPException(status_code=404, detail="Agendamento não encontrado")
     ag.status = status
     db.commit()
     return ag
 
 @app.delete("/agendamentos/{id}")
 def deletar_agendamento(id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    ag = db.query(Agendamento).filter(Agendamento.id == id).first()
+    ag = db.query(Agendamento).filter(Agendamento.id == id, Agendamento.dono_id == user["dono_id"]).first()
+    if not ag:
+        raise HTTPException(status_code=404, detail="Agendamento não encontrado")
     db.delete(ag)
     db.commit()
     return {"ok": True}
@@ -284,8 +329,10 @@ def deletar_agendamento(id: int, db: Session = Depends(get_db), user=Depends(get
 # ── LOGIN ─────────────────────────────────────────────────────
 @app.post("/usuarios")
 def criar_usuario(u: CriarUsuarioSchema, db: Session = Depends(get_db)):
+    slug = gerar_slug(u.nome_negocio, db)
     novo = Usuario(
         nome_negocio=u.nome_negocio,
+        slug=slug,
         email=u.email,
         senha=hash_senha(u.senha),
         primeiro_acesso=True
@@ -293,21 +340,29 @@ def criar_usuario(u: CriarUsuarioSchema, db: Session = Depends(get_db)):
     db.add(novo)
     db.commit()
     db.refresh(novo)
-    return {"ok": True, "id": novo.id}
+    return {"ok": True, "id": novo.id, "slug": novo.slug}
 
 @app.post("/login")
 def login(dados: LoginSchema, db: Session = Depends(get_db)):
     usuario = db.query(Usuario).filter(Usuario.email == dados.email).first()
     if not usuario or not verificar_senha(dados.senha, usuario.senha):
         return {"ok": False, "erro": "Email ou senha incorretos"}
-    token = criar_token({"sub": usuario.email})
+    token = criar_token({"sub": usuario.email, "dono_id": usuario.id})
     return {
         "ok": True,
         "token": token,
         "primeiro_acesso": usuario.primeiro_acesso,
         "nome_negocio": usuario.nome_negocio,
-        "email": usuario.email
+        "email": usuario.email,
+        "slug": usuario.slug,
     }
+
+@app.get("/negocio/{slug}")
+def obter_negocio_por_slug(slug: str, db: Session = Depends(get_db)):
+    usuario = db.query(Usuario).filter(Usuario.slug == slug).first()
+    if not usuario:
+        raise HTTPException(status_code=404, detail="Negócio não encontrado")
+    return {"id": usuario.id, "nome_negocio": usuario.nome_negocio}
 
 def enviar_email_recuperacao_seguro(destinatario: str, token: str):
     try:
@@ -355,12 +410,13 @@ def trocar_senha(dados: TrocarSenhaSchema, db: Session = Depends(get_db)):
 
 # ── SERVIÇOS ──────────────────────────────────────────────────
 @app.get("/servicos")
-def listar_servicos(db: Session = Depends(get_db)):
-    return db.query(Servico).all()
+def listar_servicos(dono_id: Optional[int] = None, authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
+    dono_id = exigir_dono_id(authorization, dono_id)
+    return db.query(Servico).filter(Servico.dono_id == dono_id).all()
 
 @app.post("/servicos")
 def criar_servico(s: ServicoSchema, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    servico = Servico(**s.model_dump())
+    servico = Servico(**s.model_dump(), dono_id=user["dono_id"])
     db.add(servico)
     db.commit()
     db.refresh(servico)
@@ -368,7 +424,9 @@ def criar_servico(s: ServicoSchema, db: Session = Depends(get_db), user=Depends(
 
 @app.put("/servicos/{id}")
 def atualizar_servico(id: int, s: ServicoSchema, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    servico = db.query(Servico).filter(Servico.id == id).first()
+    servico = db.query(Servico).filter(Servico.id == id, Servico.dono_id == user["dono_id"]).first()
+    if not servico:
+        raise HTTPException(status_code=404, detail="Serviço não encontrado")
     for k, v in s.model_dump().items():
         setattr(servico, k, v)
     db.commit()
@@ -376,19 +434,22 @@ def atualizar_servico(id: int, s: ServicoSchema, db: Session = Depends(get_db), 
 
 @app.delete("/servicos/{id}")
 def deletar_servico(id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    servico = db.query(Servico).filter(Servico.id == id).first()
+    servico = db.query(Servico).filter(Servico.id == id, Servico.dono_id == user["dono_id"]).first()
+    if not servico:
+        raise HTTPException(status_code=404, detail="Serviço não encontrado")
     db.delete(servico)
     db.commit()
     return {"ok": True}
 
 # ── PROFISSIONAIS ─────────────────────────────────────────────
 @app.get("/profissionais")
-def listar_profissionais(db: Session = Depends(get_db)):
-    return db.query(Profissional).filter(Profissional.ativo == True).all()
+def listar_profissionais(dono_id: Optional[int] = None, authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
+    dono_id = exigir_dono_id(authorization, dono_id)
+    return db.query(Profissional).filter(Profissional.ativo == True, Profissional.dono_id == dono_id).all()
 
 @app.post("/profissionais")
 def criar_profissional(p: ProfissionalSchema, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    profissional = Profissional(**p.model_dump())
+    profissional = Profissional(**p.model_dump(), dono_id=user["dono_id"])
     db.add(profissional)
     db.commit()
     db.refresh(profissional)
@@ -396,7 +457,9 @@ def criar_profissional(p: ProfissionalSchema, db: Session = Depends(get_db), use
 
 @app.put("/profissionais/{id}")
 def atualizar_profissional(id: int, p: ProfissionalSchema, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    profissional = db.query(Profissional).filter(Profissional.id == id).first()
+    profissional = db.query(Profissional).filter(Profissional.id == id, Profissional.dono_id == user["dono_id"]).first()
+    if not profissional:
+        raise HTTPException(status_code=404, detail="Profissional não encontrado")
     for k, v in p.model_dump().items():
         setattr(profissional, k, v)
     db.commit()
@@ -404,7 +467,9 @@ def atualizar_profissional(id: int, p: ProfissionalSchema, db: Session = Depends
 
 @app.delete("/profissionais/{id}")
 def deletar_profissional(id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    profissional = db.query(Profissional).filter(Profissional.id == id).first()
+    profissional = db.query(Profissional).filter(Profissional.id == id, Profissional.dono_id == user["dono_id"]).first()
+    if not profissional:
+        raise HTTPException(status_code=404, detail="Profissional não encontrado")
     db.delete(profissional)
     db.commit()
     return {"ok": True}
