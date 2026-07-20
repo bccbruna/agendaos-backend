@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, Header, HTTPException, BackgroundTasks
+from fastapi import FastAPI, Depends, Header, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -13,6 +13,11 @@ import secrets
 import requests
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+limiter = Limiter(key_func=get_remote_address)
 
 # ── BCRYPT ────────────────────────────────────────────────────
 def hash_senha(senha: str) -> str:
@@ -155,6 +160,8 @@ garantir_coluna("servicos", "dono_id", "INTEGER")
 garantir_coluna("profissionais", "dono_id", "INTEGER")
 
 app = FastAPI(title="AgendaOS API")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -330,7 +337,8 @@ def deletar_agendamento(id: int, db: Session = Depends(get_db), user=Depends(get
 
 # ── LOGIN ─────────────────────────────────────────────────────
 @app.post("/usuarios")
-def criar_usuario(u: CriarUsuarioSchema, db: Session = Depends(get_db)):
+@limiter.limit("5/hour")
+def criar_usuario(request: Request, u: CriarUsuarioSchema, db: Session = Depends(get_db)):
     slug = gerar_slug(u.nome_negocio, db)
     novo = Usuario(
         nome_negocio=u.nome_negocio,
@@ -345,7 +353,8 @@ def criar_usuario(u: CriarUsuarioSchema, db: Session = Depends(get_db)):
     return {"ok": True, "id": novo.id, "slug": novo.slug}
 
 @app.post("/login")
-def login(dados: LoginSchema, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def login(request: Request, dados: LoginSchema, db: Session = Depends(get_db)):
     usuario = db.query(Usuario).filter(Usuario.email == dados.email).first()
     if not usuario or not verificar_senha(dados.senha, usuario.senha):
         return {"ok": False, "erro": "Email ou senha incorretos"}
@@ -374,7 +383,8 @@ def enviar_email_recuperacao_seguro(destinatario: str, token: str):
         print("Erro ao enviar email de recuperação:", e, flush=True)
 
 @app.post("/esqueci-senha")
-def esqueci_senha(dados: EsqueciSenhaSchema, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+@limiter.limit("3/hour")
+def esqueci_senha(request: Request, dados: EsqueciSenhaSchema, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     usuario = db.query(Usuario).filter(Usuario.email == dados.email).first()
     if usuario:
         token = secrets.token_urlsafe(32)
@@ -386,7 +396,8 @@ def esqueci_senha(dados: EsqueciSenhaSchema, background_tasks: BackgroundTasks, 
     return {"ok": True}
 
 @app.post("/redefinir-senha")
-def redefinir_senha(dados: RedefinirSenhaSchema, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def redefinir_senha(request: Request, dados: RedefinirSenhaSchema, db: Session = Depends(get_db)):
     usuario = db.query(Usuario).filter(Usuario.reset_token == dados.token).first()
     if not usuario or not usuario.reset_token_expira or usuario.reset_token_expira < datetime.now():
         return {"ok": False, "erro": "Link inválido ou expirado"}
@@ -398,7 +409,8 @@ def redefinir_senha(dados: RedefinirSenhaSchema, db: Session = Depends(get_db)):
     return {"ok": True}
 
 @app.post("/trocar-senha")
-def trocar_senha(dados: TrocarSenhaSchema, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def trocar_senha(request: Request, dados: TrocarSenhaSchema, db: Session = Depends(get_db)):
     usuario = db.query(Usuario).filter(Usuario.email == dados.email).first()
     if not usuario:
         return {"ok": False, "erro": "Usuário não encontrado"}
