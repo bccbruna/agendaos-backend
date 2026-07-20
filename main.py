@@ -22,7 +22,9 @@ def verificar_senha(senha: str, hash: str) -> bool:
     return bcrypt.checkpw(senha.encode(), hash.encode())
 
 # ── JWT ───────────────────────────────────────────────────────
-SECRET_KEY = "agendaos-secret-key-2024-mude-em-producao"
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("Variável de ambiente SECRET_KEY não configurada.")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 
