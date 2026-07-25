@@ -14,10 +14,18 @@ import requests
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-limiter = Limiter(key_func=get_remote_address)
+def get_client_ip(request: Request) -> str:
+    # Atrás do proxy do Railway, request.client.host é o IP interno do proxy
+    # (muda a cada requisição) e não o IP real do usuário - por isso lemos
+    # o cabeçalho X-Forwarded-For, que o proxy preenche com o IP original.
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+limiter = Limiter(key_func=get_client_ip)
 
 # ── BCRYPT ────────────────────────────────────────────────────
 def hash_senha(senha: str) -> str:
