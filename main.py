@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import engine, Base, get_db, Cliente, Agendamento, Usuario, Servico, Profissional
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import Optional
 import bcrypt
 import os
@@ -200,7 +200,7 @@ class LoginSchema(BaseModel):
 
 class CriarUsuarioSchema(BaseModel):
     nome_negocio: str
-    email: str
+    email: EmailStr
     senha: str
 
 class TrocarSenhaSchema(BaseModel):
@@ -347,18 +347,34 @@ def deletar_agendamento(id: int, db: Session = Depends(get_db), user=Depends(get
 @app.post("/usuarios")
 @limiter.limit("5/hour")
 def criar_usuario(request: Request, u: CriarUsuarioSchema, db: Session = Depends(get_db)):
+    if len(u.senha) < 6:
+        return {"ok": False, "erro": "A senha deve ter pelo menos 6 caracteres."}
+    if not u.nome_negocio.strip():
+        return {"ok": False, "erro": "Informe o nome do negócio."}
+    existente = db.query(Usuario).filter(Usuario.email == u.email).first()
+    if existente:
+        return {"ok": False, "erro": "Já existe uma conta com esse email."}
     slug = gerar_slug(u.nome_negocio, db)
     novo = Usuario(
         nome_negocio=u.nome_negocio,
         slug=slug,
         email=u.email,
         senha=hash_senha(u.senha),
-        primeiro_acesso=True
+        primeiro_acesso=False
     )
     db.add(novo)
     db.commit()
     db.refresh(novo)
-    return {"ok": True, "id": novo.id, "slug": novo.slug}
+    token = criar_token({"sub": novo.email, "dono_id": novo.id})
+    return {
+        "ok": True,
+        "token": token,
+        "id": novo.id,
+        "slug": novo.slug,
+        "nome_negocio": novo.nome_negocio,
+        "email": novo.email,
+        "primeiro_acesso": novo.primeiro_acesso,
+    }
 
 @app.post("/login")
 @limiter.limit("5/minute")
