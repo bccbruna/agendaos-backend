@@ -29,7 +29,7 @@ print("DB:", db)
 
 URL = f"mysql+pymysql://{user}:{password}@{host}:{port}/{db}"
 
-engine       = create_engine(URL)
+engine       = create_engine(URL, pool_pre_ping=True, pool_recycle=280)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base         = declarative_base()
 
