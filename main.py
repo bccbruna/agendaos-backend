@@ -146,6 +146,125 @@ def enviar_email_recuperacao(destinatario: str, token: str):
     )
     resp.raise_for_status()
 
+def _formatar_data_br(data: str) -> str:
+    try:
+        return "/".join(data.split("-")[::-1])
+    except Exception:
+        return data
+
+def _formatar_preco_br(preco: float) -> str:
+    return f"{preco:.2f}".replace(".", ",")
+
+def enviar_email_confirmacao_cliente(destinatario: str, nome_cliente: str, nome_negocio: str, servico: str, data: str, hora: int, preco: float):
+    data_br = _formatar_data_br(data)
+    hora_fmt = f"{hora:02d}:00"
+    html = f"""\
+<html>
+  <body style="font-family: Arial, sans-serif; background:#08090F; padding:32px; color:#F0F0F8;">
+    <div style="max-width:420px; margin:0 auto; background:#131620; border-radius:16px; padding:32px; border:1px solid rgba(255,255,255,0.07);">
+      <h2 style="margin:0 0 16px; font-size:20px;">Agenda<span style="color:#A855F7;">OS</span></h2>
+      <p style="font-size:14px; line-height:1.6; color:rgba(240,240,248,0.7);">Olá, {nome_cliente}!</p>
+      <p style="font-size:14px; line-height:1.6; color:rgba(240,240,248,0.7);">
+        Seu agendamento com <strong style="color:#F0F0F8;">{nome_negocio}</strong> foi recebido:
+      </p>
+      <div style="background:rgba(168,85,247,0.08); border:1px solid rgba(168,85,247,0.2); border-radius:10px; padding:16px; margin:20px 0; font-size:13px; color:rgba(240,240,248,0.85);">
+        📋 <strong style="color:#F0F0F8;">{servico}</strong><br>
+        📅 {data_br} às {hora_fmt}<br>
+        💰 R$ {_formatar_preco_br(preco)}
+      </div>
+      <p style="font-size:12px; color:rgba(240,240,248,0.44); margin-top:20px;">
+        Qualquer dúvida, entre em contato direto com {nome_negocio}.
+      </p>
+    </div>
+  </body>
+</html>
+"""
+    texto = (
+        f"Olá, {nome_cliente}!\n\n"
+        f"Seu agendamento com {nome_negocio} foi recebido:\n"
+        f"{servico} - {data_br} às {hora_fmt} - R$ {_formatar_preco_br(preco)}\n\n"
+        f"Qualquer dúvida, entre em contato direto com {nome_negocio}."
+    )
+    resp = requests.post(
+        "https://api.sendgrid.com/v3/mail/send",
+        headers={
+            "Authorization": f"Bearer {SENDGRID_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "personalizations": [{"to": [{"email": destinatario}]}],
+            "from": {"email": EMAIL_REMETENTE, "name": nome_negocio or "AgendaOS"},
+            "subject": f"Agendamento confirmado - {nome_negocio}",
+            "content": [
+                {"type": "text/plain", "value": texto},
+                {"type": "text/html", "value": html},
+            ],
+        },
+        timeout=10,
+    )
+    resp.raise_for_status()
+
+def enviar_email_novo_agendamento_dono(destinatario: str, nome_negocio: str, nome_cliente: str, telefone_cliente: str, servico: str, data: str, hora: int, preco: float):
+    data_br = _formatar_data_br(data)
+    hora_fmt = f"{hora:02d}:00"
+    html = f"""\
+<html>
+  <body style="font-family: Arial, sans-serif; background:#08090F; padding:32px; color:#F0F0F8;">
+    <div style="max-width:420px; margin:0 auto; background:#131620; border-radius:16px; padding:32px; border:1px solid rgba(255,255,255,0.07);">
+      <h2 style="margin:0 0 16px; font-size:20px;">Agenda<span style="color:#A855F7;">OS</span></h2>
+      <p style="font-size:14px; line-height:1.6; color:rgba(240,240,248,0.7);">Você recebeu um novo agendamento:</p>
+      <div style="background:rgba(168,85,247,0.08); border:1px solid rgba(168,85,247,0.2); border-radius:10px; padding:16px; margin:20px 0; font-size:13px; color:rgba(240,240,248,0.85);">
+        👤 <strong style="color:#F0F0F8;">{nome_cliente}</strong> · 📱 {telefone_cliente}<br>
+        📋 {servico}<br>
+        📅 {data_br} às {hora_fmt}<br>
+        💰 R$ {_formatar_preco_br(preco)}
+      </div>
+      <p style="font-size:12px; color:rgba(240,240,248,0.44); margin-top:20px;">
+        Acesse o painel do AgendaOS para confirmar ou recusar.
+      </p>
+    </div>
+  </body>
+</html>
+"""
+    texto = (
+        f"Novo agendamento em {nome_negocio}:\n"
+        f"{nome_cliente} ({telefone_cliente})\n"
+        f"{servico} - {data_br} às {hora_fmt} - R$ {_formatar_preco_br(preco)}\n\n"
+        "Acesse o painel do AgendaOS para confirmar ou recusar."
+    )
+    resp = requests.post(
+        "https://api.sendgrid.com/v3/mail/send",
+        headers={
+            "Authorization": f"Bearer {SENDGRID_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "personalizations": [{"to": [{"email": destinatario}]}],
+            "from": {"email": EMAIL_REMETENTE, "name": "AgendaOS"},
+            "subject": f"Novo agendamento - {nome_cliente}",
+            "content": [
+                {"type": "text/plain", "value": texto},
+                {"type": "text/html", "value": html},
+            ],
+        },
+        timeout=10,
+    )
+    resp.raise_for_status()
+
+def enviar_email_confirmacao_cliente_seguro(destinatario: str, nome_cliente: str, nome_negocio: str, servico: str, data: str, hora: int, preco: float):
+    try:
+        enviar_email_confirmacao_cliente(destinatario, nome_cliente, nome_negocio, servico, data, hora, preco)
+        print("Email de confirmação enviado para", destinatario, flush=True)
+    except Exception as e:
+        print("Erro ao enviar email de confirmação para cliente:", e, flush=True)
+
+def enviar_email_novo_agendamento_dono_seguro(destinatario: str, nome_negocio: str, nome_cliente: str, telefone_cliente: str, servico: str, data: str, hora: int, preco: float):
+    try:
+        enviar_email_novo_agendamento_dono(destinatario, nome_negocio, nome_cliente, telefone_cliente, servico, data, hora, preco)
+        print("Email de novo agendamento enviado para", destinatario, flush=True)
+    except Exception as e:
+        print("Erro ao enviar email de novo agendamento para dono:", e, flush=True)
+
 # ── APP ───────────────────────────────────────────────────────
 Base.metadata.create_all(bind=engine)
 
@@ -354,12 +473,30 @@ def listar_agendamentos(db: Session = Depends(get_db), user=Depends(get_current_
     return db.query(Agendamento).filter(Agendamento.dono_id == user["dono_id"]).all()
 
 @app.post("/agendamentos")
-def criar_agendamento(a: AgendamentoSchema, dono_id: Optional[int] = None, authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
+def criar_agendamento(a: AgendamentoSchema, background_tasks: BackgroundTasks, dono_id: Optional[int] = None, authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
     dono_id = exigir_dono_id(authorization, dono_id)
     agendamento = Agendamento(**a.model_dump(), dono_id=dono_id)
     db.add(agendamento)
     db.commit()
     db.refresh(agendamento)
+
+    cliente = db.query(Cliente).filter(Cliente.id == a.cliente_id).first()
+    usuario = db.query(Usuario).filter(Usuario.id == dono_id).first()
+    if usuario:
+        nome_negocio = usuario.nome_negocio or "AgendaOS"
+        if cliente and cliente.email:
+            background_tasks.add_task(
+                enviar_email_confirmacao_cliente_seguro,
+                cliente.email, cliente.nome or "cliente", nome_negocio,
+                a.servico, a.data, a.hora, a.preco or 0.0,
+            )
+        if usuario.email:
+            background_tasks.add_task(
+                enviar_email_novo_agendamento_dono_seguro,
+                usuario.email, nome_negocio, cliente.nome if cliente else "cliente",
+                cliente.telefone if cliente else "", a.servico, a.data, a.hora, a.preco or 0.0,
+            )
+
     return agendamento
 
 @app.put("/agendamentos/{id}/status")
