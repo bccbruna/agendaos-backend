@@ -288,6 +288,29 @@ garantir_coluna("profissionais", "dono_id", "INTEGER")
 garantir_coluna("usuarios", "horario_abertura", "VARCHAR(5)")
 garantir_coluna("usuarios", "horario_fechamento", "VARCHAR(5)")
 garantir_coluna("usuarios", "dias_funcionamento", "VARCHAR(20)")
+garantir_coluna("usuarios", "assinatura_status", "VARCHAR(20)")
+garantir_coluna("usuarios", "trial_termina_em", "DATETIME")
+garantir_coluna("usuarios", "mp_preapproval_id", "VARCHAR(100)")
+garantir_coluna("usuarios", "assinatura_atualizada_em", "DATETIME")
+
+# ── ASSINATURA (Mercado Pago) ──────────────────────────────────
+TRIAL_DIAS = 14
+PRECO_MENSAL = 79.90
+MP_ACCESS_TOKEN = os.environ.get("MP_ACCESS_TOKEN")
+
+def assinatura_ativa(usuario: Usuario) -> bool:
+    if usuario.assinatura_status == "ativa":
+        return True
+    if usuario.assinatura_status == "trial" and usuario.trial_termina_em and usuario.trial_termina_em > datetime.now():
+        return True
+    return False
+
+with engine.connect() as _conn:
+    try:
+        _conn.execute(text("UPDATE usuarios SET assinatura_status = 'ativa' WHERE assinatura_status IS NULL"))
+        _conn.commit()
+    except Exception:
+        pass
 
 # ── HORÁRIO DE FUNCIONAMENTO (com valores padrão pra quem ainda não configurou) ──
 HORARIO_ABERTURA_PADRAO = "08:00"
@@ -451,6 +474,9 @@ def buscar_cliente_por_telefone(telefone: str, dono_id: int, db: Session = Depen
 @app.post("/clientes")
 def criar_cliente(c: ClienteSchema, dono_id: Optional[int] = None, authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
     dono_id = exigir_dono_id(authorization, dono_id)
+    dono = db.query(Usuario).filter(Usuario.id == dono_id).first()
+    if not dono or not assinatura_ativa(dono):
+        raise HTTPException(status_code=402, detail="Assinatura expirada. Ative sua assinatura para continuar cadastrando clientes.")
     cliente = Cliente(**c.model_dump(), dono_id=dono_id)
     db.add(cliente)
     db.commit()
@@ -475,27 +501,28 @@ def listar_agendamentos(db: Session = Depends(get_db), user=Depends(get_current_
 @app.post("/agendamentos")
 def criar_agendamento(a: AgendamentoSchema, background_tasks: BackgroundTasks, dono_id: Optional[int] = None, authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
     dono_id = exigir_dono_id(authorization, dono_id)
+    dono = db.query(Usuario).filter(Usuario.id == dono_id).first()
+    if not dono or not assinatura_ativa(dono):
+        raise HTTPException(status_code=402, detail="Este negócio não está aceitando novos agendamentos no momento.")
     agendamento = Agendamento(**a.model_dump(), dono_id=dono_id)
     db.add(agendamento)
     db.commit()
     db.refresh(agendamento)
 
     cliente = db.query(Cliente).filter(Cliente.id == a.cliente_id).first()
-    usuario = db.query(Usuario).filter(Usuario.id == dono_id).first()
-    if usuario:
-        nome_negocio = usuario.nome_negocio or "AgendaOS"
-        if cliente and cliente.email:
-            background_tasks.add_task(
-                enviar_email_confirmacao_cliente_seguro,
-                cliente.email, cliente.nome or "cliente", nome_negocio,
-                a.servico, a.data, a.hora, a.preco or 0.0,
-            )
-        if usuario.email:
-            background_tasks.add_task(
-                enviar_email_novo_agendamento_dono_seguro,
-                usuario.email, nome_negocio, cliente.nome if cliente else "cliente",
-                cliente.telefone if cliente else "", a.servico, a.data, a.hora, a.preco or 0.0,
-            )
+    nome_negocio = dono.nome_negocio or "AgendaOS"
+    if cliente and cliente.email:
+        background_tasks.add_task(
+            enviar_email_confirmacao_cliente_seguro,
+            cliente.email, cliente.nome or "cliente", nome_negocio,
+            a.servico, a.data, a.hora, a.preco or 0.0,
+        )
+    if dono.email:
+        background_tasks.add_task(
+            enviar_email_novo_agendamento_dono_seguro,
+            dono.email, nome_negocio, cliente.nome if cliente else "cliente",
+            cliente.telefone if cliente else "", a.servico, a.data, a.hora, a.preco or 0.0,
+        )
 
     return agendamento
 
@@ -534,7 +561,9 @@ def criar_usuario(request: Request, u: CriarUsuarioSchema, db: Session = Depends
         slug=slug,
         email=u.email,
         senha=hash_senha(u.senha),
-        primeiro_acesso=False
+        primeiro_acesso=False,
+        assinatura_status="trial",
+        trial_termina_em=datetime.now() + timedelta(days=TRIAL_DIAS),
     )
     db.add(novo)
     db.commit()
@@ -578,7 +607,83 @@ def obter_negocio_por_slug(slug: str, db: Session = Depends(get_db)):
         "horario_abertura": abertura,
         "horario_fechamento": fechamento,
         "dias_funcionamento": dias,
+        "aceita_agendamentos": assinatura_ativa(usuario),
     }
+
+# ── ASSINATURA ──────────────────────────────────────────────────
+@app.get("/assinatura")
+def obter_assinatura(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    usuario = db.query(Usuario).filter(Usuario.id == user["dono_id"]).first()
+    dias_restantes = None
+    if usuario.assinatura_status == "trial" and usuario.trial_termina_em:
+        dias_restantes = max((usuario.trial_termina_em - datetime.now()).days, 0)
+    return {
+        "status": usuario.assinatura_status,
+        "trial_termina_em": usuario.trial_termina_em,
+        "dias_restantes": dias_restantes,
+        "ativa": assinatura_ativa(usuario),
+        "preco_mensal": PRECO_MENSAL,
+    }
+
+@app.post("/assinatura/checkout")
+def criar_checkout_assinatura(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    usuario = db.query(Usuario).filter(Usuario.id == user["dono_id"]).first()
+    if not MP_ACCESS_TOKEN:
+        raise HTTPException(status_code=500, detail="Integração de pagamento não configurada.")
+    resp = requests.post(
+        "https://api.mercadopago.com/preapproval",
+        headers={"Authorization": f"Bearer {MP_ACCESS_TOKEN}", "Content-Type": "application/json"},
+        json={
+            "reason": "Assinatura AgendaOS",
+            "external_reference": str(usuario.id),
+            "payer_email": usuario.email,
+            "back_url": f"{FRONTEND_URL}/",
+            "auto_recurring": {
+                "frequency": 1,
+                "frequency_type": "months",
+                "transaction_amount": PRECO_MENSAL,
+                "currency_id": "BRL",
+            },
+        },
+        timeout=10,
+    )
+    if resp.status_code not in (200, 201):
+        raise HTTPException(status_code=502, detail="Não foi possível iniciar o checkout de assinatura.")
+    dados = resp.json()
+    usuario.mp_preapproval_id = dados.get("id")
+    db.commit()
+    return {"checkout_url": dados.get("init_point")}
+
+@app.post("/webhooks/mercadopago")
+def webhook_mercadopago(payload: dict, db: Session = Depends(get_db)):
+    preapproval_id = None
+    if payload.get("type") == "preapproval" or payload.get("topic") == "preapproval":
+        data = payload.get("data") or {}
+        preapproval_id = data.get("id") or payload.get("resource") or payload.get("id")
+    if not preapproval_id or not MP_ACCESS_TOKEN:
+        return {"ok": True}
+    resp = requests.get(
+        f"https://api.mercadopago.com/preapproval/{preapproval_id}",
+        headers={"Authorization": f"Bearer {MP_ACCESS_TOKEN}"},
+        timeout=10,
+    )
+    if resp.status_code != 200:
+        return {"ok": True}
+    info = resp.json()
+    usuario = db.query(Usuario).filter(Usuario.mp_preapproval_id == preapproval_id).first()
+    if not usuario:
+        ext_ref = info.get("external_reference")
+        if ext_ref:
+            usuario = db.query(Usuario).filter(Usuario.id == int(ext_ref)).first()
+    if usuario:
+        mp_status = info.get("status")
+        if mp_status == "authorized":
+            usuario.assinatura_status = "ativa"
+        elif mp_status in ("paused", "cancelled"):
+            usuario.assinatura_status = "cancelada"
+        usuario.assinatura_atualizada_em = datetime.now()
+        db.commit()
+    return {"ok": True}
 
 # ── CONFIGURAÇÕES (horário de funcionamento) ───────────────────
 @app.get("/configuracoes")
@@ -661,6 +766,9 @@ def listar_servicos(dono_id: Optional[int] = None, authorization: Optional[str] 
 
 @app.post("/servicos")
 def criar_servico(s: ServicoSchema, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    dono = db.query(Usuario).filter(Usuario.id == user["dono_id"]).first()
+    if not dono or not assinatura_ativa(dono):
+        raise HTTPException(status_code=402, detail="Assinatura expirada. Ative sua assinatura para continuar cadastrando serviços.")
     servico = Servico(**s.model_dump(), dono_id=user["dono_id"])
     db.add(servico)
     db.commit()
