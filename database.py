@@ -91,4 +91,7 @@ class Usuario(Base):
     primeiro_acesso = Column(Boolean, default=True)
     reset_token       = Column(String(255), nullable=True)
     reset_token_expira = Column(DateTime, nullable=True)
+    horario_abertura   = Column(String(5), nullable=True)
+    horario_fechamento = Column(String(5), nullable=True)
+    dias_funcionamento = Column(String(20), nullable=True)
     criado_em     = Column(DateTime, default=datetime.now)

@@ -166,6 +166,20 @@ garantir_coluna("clientes", "dono_id", "INTEGER")
 garantir_coluna("agendamentos", "dono_id", "INTEGER")
 garantir_coluna("servicos", "dono_id", "INTEGER")
 garantir_coluna("profissionais", "dono_id", "INTEGER")
+garantir_coluna("usuarios", "horario_abertura", "VARCHAR(5)")
+garantir_coluna("usuarios", "horario_fechamento", "VARCHAR(5)")
+garantir_coluna("usuarios", "dias_funcionamento", "VARCHAR(20)")
+
+# ── HORÁRIO DE FUNCIONAMENTO (com valores padrão pra quem ainda não configurou) ──
+HORARIO_ABERTURA_PADRAO = "08:00"
+HORARIO_FECHAMENTO_PADRAO = "18:00"
+DIAS_FUNCIONAMENTO_PADRAO = "1,2,3,4,5,6"  # 0=domingo...6=sábado (fechado aos domingos por padrão)
+
+def config_horario(usuario: Usuario):
+    abertura = usuario.horario_abertura or HORARIO_ABERTURA_PADRAO
+    fechamento = usuario.horario_fechamento or HORARIO_FECHAMENTO_PADRAO
+    dias = usuario.dias_funcionamento or DIAS_FUNCIONAMENTO_PADRAO
+    return abertura, fechamento, dias
 
 app = FastAPI(title="AgendaOS API")
 app.state.limiter = limiter
@@ -226,6 +240,11 @@ class ProfissionalSchema(BaseModel):
     especialidade: Optional[str] = ""
     ativo: Optional[bool] = True
 
+class ConfiguracoesSchema(BaseModel):
+    horario_abertura: str
+    horario_fechamento: str
+    dias_funcionamento: str  # ex: "1,2,3,4,5,6" (0=domingo...6=sabado)
+
 @app.get("/horarios-disponiveis")
 def horarios_disponiveis(data: str, servico_id: int, profissional_id: Optional[int] = None,
                           dono_id: Optional[int] = None, authorization: Optional[str] = Header(None),
@@ -234,6 +253,18 @@ def horarios_disponiveis(data: str, servico_id: int, profissional_id: Optional[i
     servico = db.query(Servico).filter(Servico.id == servico_id, Servico.dono_id == dono_id).first()
     if not servico:
         return []
+
+    usuario = db.query(Usuario).filter(Usuario.id == dono_id).first()
+    abertura, fechamento, dias = config_horario(usuario)
+
+    # Dia da semana no padrão 0=domingo...6=sabado (igual ao getDay() do JS)
+    data_obj = datetime.strptime(data, "%Y-%m-%d")
+    dia_semana = (data_obj.weekday() + 1) % 7
+    if str(dia_semana) not in dias.split(","):
+        return []  # negócio fechado nesse dia
+
+    hora_abertura, min_abertura = (int(x) for x in abertura.split(":"))
+    hora_fechamento, min_fechamento = (int(x) for x in fechamento.split(":"))
 
     duracao_slots = (servico.duracao + 29) // 30  # quantos slots de 30min ocupa
     query = db.query(Agendamento).filter(
@@ -260,26 +291,32 @@ def horarios_disponiveis(data: str, servico_id: int, profissional_id: Optional[i
                 minuto = 0
                 hora += 1
     
-    # Gera horários disponíveis das 8h às 18h em slots de 30min
+    # Gera horários disponíveis dentro do expediente configurado, em slots de 30min
     horarios = []
-    for h in range(8, 19):
-        for m in [0, 30]:
-            # Verifica se todos os slots necessários estão livres
-            disponivel = True
-            hora_check = h
-            min_check = m
-            for i in range(duracao_slots):
-                if (hora_check, min_check) in slots_ocupados:
-                    disponivel = False
-                    break
-                min_check += 30
-                if min_check >= 60:
-                    min_check = 0
-                    hora_check += 1
-            
-            if disponivel and (h < 18 or (h == 18 and m == 0)):
-                horarios.append(f"{h:02d}:{m:02d}")
-    
+    h, m = hora_abertura, min_abertura
+    while (h, m) < (hora_fechamento, min_fechamento):
+        disponivel = True
+        hora_check, min_check = h, m
+        for i in range(duracao_slots):
+            if (hora_check, min_check) in slots_ocupados:
+                disponivel = False
+                break
+            min_check += 30
+            if min_check >= 60:
+                min_check = 0
+                hora_check += 1
+        # o servico nao pode terminar depois do horario de fechamento
+        if (hora_check, min_check) > (hora_fechamento, min_fechamento):
+            disponivel = False
+
+        if disponivel:
+            horarios.append(f"{h:02d}:{m:02d}")
+
+        m += 30
+        if m >= 60:
+            m = 0
+            h += 1
+
     return horarios
 
 # ── CLIENTES ──────────────────────────────────────────────────
@@ -397,7 +434,40 @@ def obter_negocio_por_slug(slug: str, db: Session = Depends(get_db)):
     usuario = db.query(Usuario).filter(Usuario.slug == slug).first()
     if not usuario:
         raise HTTPException(status_code=404, detail="Negócio não encontrado")
-    return {"id": usuario.id, "nome_negocio": usuario.nome_negocio}
+    abertura, fechamento, dias = config_horario(usuario)
+    return {
+        "id": usuario.id,
+        "nome_negocio": usuario.nome_negocio,
+        "horario_abertura": abertura,
+        "horario_fechamento": fechamento,
+        "dias_funcionamento": dias,
+    }
+
+# ── CONFIGURAÇÕES (horário de funcionamento) ───────────────────
+@app.get("/configuracoes")
+def obter_configuracoes(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    usuario = db.query(Usuario).filter(Usuario.id == user["dono_id"]).first()
+    abertura, fechamento, dias = config_horario(usuario)
+    return {"horario_abertura": abertura, "horario_fechamento": fechamento, "dias_funcionamento": dias}
+
+@app.put("/configuracoes")
+def atualizar_configuracoes(c: ConfiguracoesSchema, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    for valor, nome in [(c.horario_abertura, "abertura"), (c.horario_fechamento, "fechamento")]:
+        if not re.match(r"^\d{2}:\d{2}$", valor):
+            return {"ok": False, "erro": f"Horário de {nome} inválido (use HH:MM)."}
+    if c.horario_abertura >= c.horario_fechamento:
+        return {"ok": False, "erro": "O horário de abertura precisa ser antes do fechamento."}
+    dias_validos = {"0", "1", "2", "3", "4", "5", "6"}
+    dias_informados = [d.strip() for d in c.dias_funcionamento.split(",") if d.strip()]
+    if not dias_informados or not set(dias_informados).issubset(dias_validos):
+        return {"ok": False, "erro": "Selecione ao menos um dia de funcionamento válido."}
+
+    usuario = db.query(Usuario).filter(Usuario.id == user["dono_id"]).first()
+    usuario.horario_abertura = c.horario_abertura
+    usuario.horario_fechamento = c.horario_fechamento
+    usuario.dias_funcionamento = ",".join(dias_informados)
+    db.commit()
+    return {"ok": True}
 
 def enviar_email_recuperacao_seguro(destinatario: str, token: str):
     try:
