@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, Boolean, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, Boolean, ForeignKey, Index
 from sqlalchemy.orm import sessionmaker, declarative_base
 from datetime import datetime
 import os
@@ -63,6 +63,7 @@ class Agendamento(Base):
     obs        = Column(String(500))
     preco      = Column(Float)
     criado_em  = Column(DateTime, default=datetime.now)
+    __table_args__ = (Index("ix_agendamentos_dono_data", "dono_id", "data"),)
 
 class Profissional(Base):
     __tablename__ = "profissionais"

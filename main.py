@@ -10,6 +10,8 @@ import os
 import re
 import unicodedata
 import secrets
+import hmac
+import hashlib
 import requests
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
@@ -98,13 +100,41 @@ SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
 EMAIL_REMETENTE = os.environ.get("EMAIL_REMETENTE", "naoresponda.agendaos@gmail.com")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://agendaos-frontend.vercel.app")
 
-def enviar_email_recuperacao(destinatario: str, token: str):
-    link = f"{FRONTEND_URL}/redefinir-senha?token={token}"
-    html = f"""\
+def _email_html(conteudo: str) -> str:
+    return f"""\
 <html>
   <body style="font-family: Arial, sans-serif; background:#08090F; padding:32px; color:#F0F0F8;">
     <div style="max-width:420px; margin:0 auto; background:#131620; border-radius:16px; padding:32px; border:1px solid rgba(255,255,255,0.07);">
       <h2 style="margin:0 0 16px; font-size:20px;">Agenda<span style="color:#A855F7;">OS</span></h2>
+      {conteudo}
+    </div>
+  </body>
+</html>
+"""
+
+def _enviar_email(destinatario: str, assunto: str, texto: str, html: str, nome_remetente: str = "AgendaOS"):
+    resp = requests.post(
+        "https://api.sendgrid.com/v3/mail/send",
+        headers={
+            "Authorization": f"Bearer {SENDGRID_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "personalizations": [{"to": [{"email": destinatario}]}],
+            "from": {"email": EMAIL_REMETENTE, "name": nome_remetente},
+            "subject": assunto,
+            "content": [
+                {"type": "text/plain", "value": texto},
+                {"type": "text/html", "value": html},
+            ],
+        },
+        timeout=10,
+    )
+    resp.raise_for_status()
+
+def enviar_email_recuperacao(destinatario: str, token: str):
+    link = f"{FRONTEND_URL}/redefinir-senha?token={token}"
+    html = _email_html(f"""\
       <p style="font-size:14px; line-height:1.6; color:rgba(240,240,248,0.7);">Olá!</p>
       <p style="font-size:14px; line-height:1.6; color:rgba(240,240,248,0.7);">
         Recebemos um pedido para redefinir sua senha. Clique no botão abaixo para criar uma nova senha (válido por 1 hora):
@@ -120,35 +150,14 @@ def enviar_email_recuperacao(destinatario: str, token: str):
       </p>
       <p style="font-size:12px; color:rgba(240,240,248,0.44); margin-top:20px;">
         Se você não pediu isso, pode ignorar este email.
-      </p>
-    </div>
-  </body>
-</html>
-"""
+      </p>""")
     texto = (
         "Olá!\n\n"
         "Recebemos um pedido para redefinir sua senha no AgendaOS.\n\n"
         f"Clique no link abaixo para criar uma nova senha (válido por 1 hora):\n{link}\n\n"
         "Se você não pediu isso, pode ignorar este email."
     )
-    resp = requests.post(
-        "https://api.sendgrid.com/v3/mail/send",
-        headers={
-            "Authorization": f"Bearer {SENDGRID_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "personalizations": [{"to": [{"email": destinatario}]}],
-            "from": {"email": EMAIL_REMETENTE, "name": "AgendaOS"},
-            "subject": "Recuperação de senha - AgendaOS",
-            "content": [
-                {"type": "text/plain", "value": texto},
-                {"type": "text/html", "value": html},
-            ],
-        },
-        timeout=10,
-    )
-    resp.raise_for_status()
+    _enviar_email(destinatario, "Recuperação de senha - AgendaOS", texto, html)
 
 def _formatar_data_br(data: str) -> str:
     try:
@@ -162,11 +171,7 @@ def _formatar_preco_br(preco: float) -> str:
 def enviar_email_confirmacao_cliente(destinatario: str, nome_cliente: str, nome_negocio: str, servico: str, data: str, hora: int, preco: float):
     data_br = _formatar_data_br(data)
     hora_fmt = f"{hora:02d}:00"
-    html = f"""\
-<html>
-  <body style="font-family: Arial, sans-serif; background:#08090F; padding:32px; color:#F0F0F8;">
-    <div style="max-width:420px; margin:0 auto; background:#131620; border-radius:16px; padding:32px; border:1px solid rgba(255,255,255,0.07);">
-      <h2 style="margin:0 0 16px; font-size:20px;">Agenda<span style="color:#A855F7;">OS</span></h2>
+    html = _email_html(f"""\
       <p style="font-size:14px; line-height:1.6; color:rgba(240,240,248,0.7);">Olá, {nome_cliente}!</p>
       <p style="font-size:14px; line-height:1.6; color:rgba(240,240,248,0.7);">
         Seu agendamento com <strong style="color:#F0F0F8;">{nome_negocio}</strong> foi recebido:
@@ -178,44 +183,19 @@ def enviar_email_confirmacao_cliente(destinatario: str, nome_cliente: str, nome_
       </div>
       <p style="font-size:12px; color:rgba(240,240,248,0.44); margin-top:20px;">
         Qualquer dúvida, entre em contato direto com {nome_negocio}.
-      </p>
-    </div>
-  </body>
-</html>
-"""
+      </p>""")
     texto = (
         f"Olá, {nome_cliente}!\n\n"
         f"Seu agendamento com {nome_negocio} foi recebido:\n"
         f"{servico} - {data_br} às {hora_fmt} - R$ {_formatar_preco_br(preco)}\n\n"
         f"Qualquer dúvida, entre em contato direto com {nome_negocio}."
     )
-    resp = requests.post(
-        "https://api.sendgrid.com/v3/mail/send",
-        headers={
-            "Authorization": f"Bearer {SENDGRID_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "personalizations": [{"to": [{"email": destinatario}]}],
-            "from": {"email": EMAIL_REMETENTE, "name": nome_negocio or "AgendaOS"},
-            "subject": f"Agendamento confirmado - {nome_negocio}",
-            "content": [
-                {"type": "text/plain", "value": texto},
-                {"type": "text/html", "value": html},
-            ],
-        },
-        timeout=10,
-    )
-    resp.raise_for_status()
+    _enviar_email(destinatario, f"Agendamento confirmado - {nome_negocio}", texto, html, nome_remetente=nome_negocio or "AgendaOS")
 
 def enviar_email_novo_agendamento_dono(destinatario: str, nome_negocio: str, nome_cliente: str, telefone_cliente: str, servico: str, data: str, hora: int, preco: float):
     data_br = _formatar_data_br(data)
     hora_fmt = f"{hora:02d}:00"
-    html = f"""\
-<html>
-  <body style="font-family: Arial, sans-serif; background:#08090F; padding:32px; color:#F0F0F8;">
-    <div style="max-width:420px; margin:0 auto; background:#131620; border-radius:16px; padding:32px; border:1px solid rgba(255,255,255,0.07);">
-      <h2 style="margin:0 0 16px; font-size:20px;">Agenda<span style="color:#A855F7;">OS</span></h2>
+    html = _email_html(f"""\
       <p style="font-size:14px; line-height:1.6; color:rgba(240,240,248,0.7);">Você recebeu um novo agendamento:</p>
       <div style="background:rgba(168,85,247,0.08); border:1px solid rgba(168,85,247,0.2); border-radius:10px; padding:16px; margin:20px 0; font-size:13px; color:rgba(240,240,248,0.85);">
         👤 <strong style="color:#F0F0F8;">{nome_cliente}</strong> · 📱 {telefone_cliente}<br>
@@ -225,35 +205,14 @@ def enviar_email_novo_agendamento_dono(destinatario: str, nome_negocio: str, nom
       </div>
       <p style="font-size:12px; color:rgba(240,240,248,0.44); margin-top:20px;">
         Acesse o painel do AgendaOS para confirmar ou recusar.
-      </p>
-    </div>
-  </body>
-</html>
-"""
+      </p>""")
     texto = (
         f"Novo agendamento em {nome_negocio}:\n"
         f"{nome_cliente} ({telefone_cliente})\n"
         f"{servico} - {data_br} às {hora_fmt} - R$ {_formatar_preco_br(preco)}\n\n"
         "Acesse o painel do AgendaOS para confirmar ou recusar."
     )
-    resp = requests.post(
-        "https://api.sendgrid.com/v3/mail/send",
-        headers={
-            "Authorization": f"Bearer {SENDGRID_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "personalizations": [{"to": [{"email": destinatario}]}],
-            "from": {"email": EMAIL_REMETENTE, "name": "AgendaOS"},
-            "subject": f"Novo agendamento - {nome_cliente}",
-            "content": [
-                {"type": "text/plain", "value": texto},
-                {"type": "text/html", "value": html},
-            ],
-        },
-        timeout=10,
-    )
-    resp.raise_for_status()
+    _enviar_email(destinatario, f"Novo agendamento - {nome_cliente}", texto, html)
 
 def enviar_email_confirmacao_cliente_seguro(destinatario: str, nome_cliente: str, nome_negocio: str, servico: str, data: str, hora: int, preco: float):
     try:
@@ -297,10 +256,33 @@ garantir_coluna("usuarios", "trial_termina_em", "DATETIME")
 garantir_coluna("usuarios", "mp_preapproval_id", "VARCHAR(100)")
 garantir_coluna("usuarios", "assinatura_atualizada_em", "DATETIME")
 
+def garantir_indice(tabela: str, nome_indice: str, colunas: str):
+    with engine.connect() as conn:
+        try:
+            conn.execute(text(f"CREATE INDEX {nome_indice} ON {tabela} ({colunas})"))
+            conn.commit()
+        except Exception:
+            pass  # índice já existe
+
+garantir_indice("agendamentos", "ix_agendamentos_dono_data", "dono_id, data")
+
 # ── ASSINATURA (Mercado Pago) ──────────────────────────────────
 TRIAL_DIAS = 14
 PRECO_MENSAL = 79.90
 MP_ACCESS_TOKEN = os.environ.get("MP_ACCESS_TOKEN")
+MP_WEBHOOK_SECRET = os.environ.get("MP_WEBHOOK_SECRET")
+
+def verificar_assinatura_webhook_mp(x_signature: str, x_request_id: str, data_id: str) -> bool:
+    try:
+        partes = dict(p.split("=", 1) for p in x_signature.split(",") if "=" in p)
+        ts, v1 = partes.get("ts"), partes.get("v1")
+        if not ts or not v1:
+            return False
+        manifest = f"id:{data_id};request-id:{x_request_id};ts:{ts};"
+        esperado = hmac.new(MP_WEBHOOK_SECRET.encode(), manifest.encode(), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(esperado, v1)
+    except Exception:
+        return False
 
 def assinatura_ativa(usuario: Usuario) -> bool:
     if usuario.assinatura_status == "ativa":
@@ -741,13 +723,21 @@ def cancelar_assinatura(db: Session = Depends(get_db), user=Depends(get_current_
     return {"ok": True}
 
 @app.post("/webhooks/mercadopago")
-def webhook_mercadopago(payload: dict, db: Session = Depends(get_db)):
+def webhook_mercadopago(payload: dict, request: Request, db: Session = Depends(get_db),
+                         x_signature: Optional[str] = Header(None, alias="x-signature"),
+                         x_request_id: Optional[str] = Header(None, alias="x-request-id")):
     preapproval_id = None
     if payload.get("type") == "preapproval" or payload.get("topic") == "preapproval":
         data = payload.get("data") or {}
         preapproval_id = data.get("id") or payload.get("resource") or payload.get("id")
     if not preapproval_id or not MP_ACCESS_TOKEN:
         return {"ok": True}
+
+    if MP_WEBHOOK_SECRET:
+        data_id_url = request.query_params.get("data.id") or preapproval_id
+        if not x_signature or not x_request_id or not verificar_assinatura_webhook_mp(x_signature, x_request_id, data_id_url):
+            raise HTTPException(status_code=401, detail="Assinatura inválida")
+
     resp = requests.get(
         f"https://api.mercadopago.com/preapproval/{preapproval_id}",
         headers={"Authorization": f"Bearer {MP_ACCESS_TOKEN}"},
