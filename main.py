@@ -76,17 +76,21 @@ def gerar_slug(nome: str, db: Session) -> str:
         contador += 1
     return slug
 
-def resolver_dono_id(authorization: Optional[str], dono_id: Optional[int] = None) -> Optional[int]:
+def resolver_dono_id(authorization: Optional[str], slug: Optional[str], db: Session) -> Optional[int]:
     if authorization and authorization.startswith("Bearer "):
         payload = verificar_token(authorization.split(" ")[1])
         if payload and payload.get("dono_id"):
             return payload["dono_id"]
-    return dono_id
+    if slug:
+        usuario = db.query(Usuario).filter(Usuario.slug == slug).first()
+        if usuario:
+            return usuario.id
+    return None
 
-def exigir_dono_id(authorization: Optional[str], dono_id: Optional[int] = None) -> int:
-    resolvido = resolver_dono_id(authorization, dono_id)
+def exigir_dono_id(authorization: Optional[str], slug: Optional[str], db: Session) -> int:
+    resolvido = resolver_dono_id(authorization, slug, db)
     if not resolvido:
-        raise HTTPException(status_code=400, detail="Autenticação ou dono_id obrigatório")
+        raise HTTPException(status_code=400, detail="Autenticação ou slug obrigatório")
     return resolvido
 
 # ── EMAIL (recuperação de senha) ───────────────────────────────
@@ -389,9 +393,9 @@ class ConfiguracoesSchema(BaseModel):
 
 @app.get("/horarios-disponiveis")
 def horarios_disponiveis(data: str, servico_id: int, profissional_id: Optional[int] = None,
-                          dono_id: Optional[int] = None, authorization: Optional[str] = Header(None),
+                          slug: Optional[str] = None, authorization: Optional[str] = Header(None),
                           db: Session = Depends(get_db)):
-    dono_id = exigir_dono_id(authorization, dono_id)
+    dono_id = exigir_dono_id(authorization, slug, db)
     servico = db.query(Servico).filter(Servico.id == servico_id, Servico.dono_id == dono_id).first()
     if not servico:
         return []
@@ -467,13 +471,16 @@ def listar_clientes(db: Session = Depends(get_db), user=Depends(get_current_user
     return db.query(Cliente).filter(Cliente.dono_id == user["dono_id"]).all()
 
 @app.get("/clientes/buscar")
-def buscar_cliente_por_telefone(telefone: str, dono_id: int, db: Session = Depends(get_db)):
-    cliente = db.query(Cliente).filter(Cliente.telefone == telefone, Cliente.dono_id == dono_id).first()
+def buscar_cliente_por_telefone(telefone: str, slug: str, db: Session = Depends(get_db)):
+    usuario = db.query(Usuario).filter(Usuario.slug == slug).first()
+    if not usuario:
+        raise HTTPException(status_code=404, detail="Negócio não encontrado")
+    cliente = db.query(Cliente).filter(Cliente.telefone == telefone, Cliente.dono_id == usuario.id).first()
     return cliente
 
 @app.post("/clientes")
-def criar_cliente(c: ClienteSchema, dono_id: Optional[int] = None, authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
-    dono_id = exigir_dono_id(authorization, dono_id)
+def criar_cliente(c: ClienteSchema, slug: Optional[str] = None, authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
+    dono_id = exigir_dono_id(authorization, slug, db)
     dono = db.query(Usuario).filter(Usuario.id == dono_id).first()
     if not dono or not assinatura_ativa(dono):
         raise HTTPException(status_code=402, detail="Assinatura expirada. Ative sua assinatura para continuar cadastrando clientes.")
@@ -499,8 +506,8 @@ def listar_agendamentos(db: Session = Depends(get_db), user=Depends(get_current_
     return db.query(Agendamento).filter(Agendamento.dono_id == user["dono_id"]).all()
 
 @app.post("/agendamentos")
-def criar_agendamento(a: AgendamentoSchema, background_tasks: BackgroundTasks, dono_id: Optional[int] = None, authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
-    dono_id = exigir_dono_id(authorization, dono_id)
+def criar_agendamento(a: AgendamentoSchema, background_tasks: BackgroundTasks, slug: Optional[str] = None, authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
+    dono_id = exigir_dono_id(authorization, slug, db)
     dono = db.query(Usuario).filter(Usuario.id == dono_id).first()
     if not dono or not assinatura_ativa(dono):
         raise HTTPException(status_code=402, detail="Este negócio não está aceitando novos agendamentos no momento.")
@@ -777,8 +784,8 @@ def trocar_senha(request: Request, dados: TrocarSenhaSchema, db: Session = Depen
 
 # ── SERVIÇOS ──────────────────────────────────────────────────
 @app.get("/servicos")
-def listar_servicos(dono_id: Optional[int] = None, authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
-    dono_id = exigir_dono_id(authorization, dono_id)
+def listar_servicos(slug: Optional[str] = None, authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
+    dono_id = exigir_dono_id(authorization, slug, db)
     return db.query(Servico).filter(Servico.dono_id == dono_id).all()
 
 @app.post("/servicos")
@@ -813,8 +820,8 @@ def deletar_servico(id: int, db: Session = Depends(get_db), user=Depends(get_cur
 
 # ── PROFISSIONAIS ─────────────────────────────────────────────
 @app.get("/profissionais")
-def listar_profissionais(dono_id: Optional[int] = None, authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
-    dono_id = exigir_dono_id(authorization, dono_id)
+def listar_profissionais(slug: Optional[str] = None, authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
+    dono_id = exigir_dono_id(authorization, slug, db)
     return db.query(Profissional).filter(Profissional.ativo == True, Profissional.dono_id == dono_id).all()
 
 @app.post("/profissionais")
