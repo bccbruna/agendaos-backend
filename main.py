@@ -505,6 +505,20 @@ def criar_cliente(c: ClienteSchema, slug: Optional[str] = None, authorization: O
     db.refresh(cliente)
     return cliente
 
+@app.put("/clientes/{id}")
+def atualizar_cliente(id: int, c: ClienteSchema, slug: Optional[str] = None, authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
+    dono_id = exigir_dono_id(authorization, slug, db)
+    cliente = db.query(Cliente).filter(Cliente.id == id, Cliente.dono_id == dono_id).first()
+    if not cliente:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+    cliente.nome = c.nome
+    cliente.telefone = c.telefone
+    cliente.email = c.email or ""
+    cliente.tipo = c.tipo or cliente.tipo
+    db.commit()
+    db.refresh(cliente)
+    return cliente
+
 @app.delete("/clientes/{id}")
 def deletar_cliente(id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     cliente = db.query(Cliente).filter(Cliente.id == id, Cliente.dono_id == user["dono_id"]).first()
