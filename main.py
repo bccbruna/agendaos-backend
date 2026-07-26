@@ -391,6 +391,43 @@ class ConfiguracoesSchema(BaseModel):
     horario_fechamento: str
     dias_funcionamento: str  # ex: "1,2,3,4,5,6" (0=domingo...6=sabado)
 
+def calcular_slots_ocupados(db: Session, dono_id: int, data: str, profissional_id: Optional[int] = None,
+                             excluir_agendamento_id: Optional[int] = None):
+    query = db.query(Agendamento).filter(
+        Agendamento.data == data,
+        Agendamento.dono_id == dono_id,
+        Agendamento.status != "cancelled"
+    )
+    if profissional_id:
+        query = query.filter(Agendamento.profissional_id == profissional_id)
+    if excluir_agendamento_id:
+        query = query.filter(Agendamento.id != excluir_agendamento_id)
+    agendamentos = query.all()
+
+    duracoes_por_nome = {
+        s.nome: s.duracao for s in db.query(Servico).filter(Servico.dono_id == dono_id).all()
+    }
+
+    # Monta lista de slots ocupados (cada hora tem 2 slots: :00 e :30)
+    slots_ocupados = set()
+    for ag in agendamentos:
+        dur = duracoes_por_nome.get(ag.servico, 30)
+        for slot in slots_necessarios(int(ag.hora), dur):
+            slots_ocupados.add(slot)
+    return slots_ocupados
+
+def slots_necessarios(hora_inicio: int, duracao: int):
+    n_slots = (duracao + 29) // 30
+    slots = []
+    hora, minuto = hora_inicio, 0
+    for i in range(n_slots):
+        slots.append((hora, minuto))
+        minuto += 30
+        if minuto >= 60:
+            minuto = 0
+            hora += 1
+    return slots
+
 @app.get("/horarios-disponiveis")
 def horarios_disponiveis(data: str, servico_id: int, profissional_id: Optional[int] = None,
                           slug: Optional[str] = None, authorization: Optional[str] = Header(None),
@@ -413,30 +450,8 @@ def horarios_disponiveis(data: str, servico_id: int, profissional_id: Optional[i
     hora_fechamento, min_fechamento = (int(x) for x in fechamento.split(":"))
 
     duracao_slots = (servico.duracao + 29) // 30  # quantos slots de 30min ocupa
-    query = db.query(Agendamento).filter(
-        Agendamento.data == data,
-        Agendamento.dono_id == dono_id,
-        Agendamento.status != "cancelled"
-    )
-    if profissional_id:
-        query = query.filter(Agendamento.profissional_id == profissional_id)
-    agendamentos = query.all()
-    
-    # Monta lista de slots ocupados (cada hora tem 2 slots: :00 e :30)
-    slots_ocupados = set()
-    for ag in agendamentos:
-        s = db.query(Servico).filter(Servico.nome == ag.servico, Servico.dono_id == dono_id).first()
-        dur = s.duracao if s else 30
-        n_slots = (dur + 29) // 30
-        hora = int(ag.hora)
-        minuto = 0
-        for i in range(n_slots):
-            slots_ocupados.add((hora, minuto))
-            minuto += 30
-            if minuto >= 60:
-                minuto = 0
-                hora += 1
-    
+    slots_ocupados = calcular_slots_ocupados(db, dono_id, data, profissional_id)
+
     # Gera horários disponíveis dentro do expediente configurado, em slots de 30min
     horarios = []
     h, m = hora_abertura, min_abertura
@@ -511,6 +526,14 @@ def criar_agendamento(a: AgendamentoSchema, background_tasks: BackgroundTasks, s
     dono = db.query(Usuario).filter(Usuario.id == dono_id).first()
     if not dono or not assinatura_ativa(dono):
         raise HTTPException(status_code=402, detail="Este negócio não está aceitando novos agendamentos no momento.")
+
+    servico_obj = db.query(Servico).filter(Servico.nome == a.servico, Servico.dono_id == dono_id).first()
+    duracao = servico_obj.duracao if servico_obj else 30
+    necessarios = slots_necessarios(a.hora, duracao)
+    slots_ocupados = calcular_slots_ocupados(db, dono_id, a.data, a.profissional_id)
+    if any(slot in slots_ocupados for slot in necessarios):
+        raise HTTPException(status_code=409, detail="Esse horário já está ocupado. Escolha outro horário.")
+
     agendamento = Agendamento(**a.model_dump(), dono_id=dono_id)
     db.add(agendamento)
     db.commit()
