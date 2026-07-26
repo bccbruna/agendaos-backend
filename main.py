@@ -654,6 +654,23 @@ def criar_checkout_assinatura(db: Session = Depends(get_db), user=Depends(get_cu
     db.commit()
     return {"checkout_url": dados.get("init_point")}
 
+@app.post("/assinatura/cancelar")
+def cancelar_assinatura(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    usuario = db.query(Usuario).filter(Usuario.id == user["dono_id"]).first()
+    if not usuario.mp_preapproval_id:
+        raise HTTPException(status_code=400, detail="Nenhuma assinatura ativa encontrada.")
+    if MP_ACCESS_TOKEN:
+        requests.put(
+            f"https://api.mercadopago.com/preapproval/{usuario.mp_preapproval_id}",
+            headers={"Authorization": f"Bearer {MP_ACCESS_TOKEN}", "Content-Type": "application/json"},
+            json={"status": "cancelled"},
+            timeout=10,
+        )
+    usuario.assinatura_status = "cancelada"
+    usuario.assinatura_atualizada_em = datetime.now()
+    db.commit()
+    return {"ok": True}
+
 @app.post("/webhooks/mercadopago")
 def webhook_mercadopago(payload: dict, db: Session = Depends(get_db)):
     preapproval_id = None
@@ -673,7 +690,7 @@ def webhook_mercadopago(payload: dict, db: Session = Depends(get_db)):
     usuario = db.query(Usuario).filter(Usuario.mp_preapproval_id == preapproval_id).first()
     if not usuario:
         ext_ref = info.get("external_reference")
-        if ext_ref:
+        if ext_ref and ext_ref.isdigit():
             usuario = db.query(Usuario).filter(Usuario.id == int(ext_ref)).first()
     if usuario:
         mp_status = info.get("status")
