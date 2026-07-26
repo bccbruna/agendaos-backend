@@ -565,6 +565,31 @@ def atualizar_status(id: int, status: str, db: Session = Depends(get_db), user=D
     db.commit()
     return ag
 
+@app.put("/agendamentos/{id}")
+def atualizar_agendamento(id: int, a: AgendamentoSchema, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    ag = db.query(Agendamento).filter(Agendamento.id == id, Agendamento.dono_id == user["dono_id"]).first()
+    if not ag:
+        raise HTTPException(status_code=404, detail="Agendamento não encontrado")
+
+    servico_obj = db.query(Servico).filter(Servico.nome == a.servico, Servico.dono_id == user["dono_id"]).first()
+    duracao = servico_obj.duracao if servico_obj else 30
+    necessarios = slots_necessarios(a.hora, duracao)
+    slots_ocupados = calcular_slots_ocupados(db, user["dono_id"], a.data, a.profissional_id, excluir_agendamento_id=id)
+    if any(slot in slots_ocupados for slot in necessarios):
+        raise HTTPException(status_code=409, detail="Esse horário já está ocupado. Escolha outro horário.")
+
+    ag.cliente_id = a.cliente_id
+    ag.profissional_id = a.profissional_id
+    ag.servico = a.servico
+    ag.data = a.data
+    ag.hora = a.hora
+    ag.status = a.status or ag.status
+    ag.obs = a.obs or ""
+    ag.preco = a.preco or 0.0
+    db.commit()
+    db.refresh(ag)
+    return ag
+
 @app.delete("/agendamentos/{id}")
 def deletar_agendamento(id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     ag = db.query(Agendamento).filter(Agendamento.id == id, Agendamento.dono_id == user["dono_id"]).first()
