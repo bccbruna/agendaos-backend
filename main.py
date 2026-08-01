@@ -630,6 +630,19 @@ def criar_usuario(request: Request, u: CriarUsuarioSchema, db: Session = Depends
         "primeiro_acesso": novo.primeiro_acesso,
     }
 
+@app.delete("/usuarios/me")
+def deletar_propria_conta(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    dono_id = user["dono_id"]
+    db.query(Agendamento).filter(Agendamento.dono_id == dono_id).delete()
+    db.query(Cliente).filter(Cliente.dono_id == dono_id).delete()
+    db.query(Servico).filter(Servico.dono_id == dono_id).delete()
+    db.query(Profissional).filter(Profissional.dono_id == dono_id).delete()
+    usuario = db.query(Usuario).filter(Usuario.id == dono_id).first()
+    if usuario:
+        db.delete(usuario)
+    db.commit()
+    return {"ok": True}
+
 @app.post("/login")
 @limiter.limit("5/minute")
 def login(request: Request, dados: LoginSchema, db: Session = Depends(get_db)):
