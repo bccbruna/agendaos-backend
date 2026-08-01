@@ -677,10 +677,25 @@ def obter_assinatura(db: Session = Depends(get_db), user=Depends(get_current_use
     }
 
 @app.post("/assinatura/checkout")
-def criar_checkout_assinatura(db: Session = Depends(get_db), user=Depends(get_current_user)):
+@limiter.limit("10/hour")
+def criar_checkout_assinatura(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     usuario = db.query(Usuario).filter(Usuario.id == user["dono_id"]).first()
     if not MP_ACCESS_TOKEN:
         raise HTTPException(status_code=500, detail="Integração de pagamento não configurada.")
+
+    # Evita criar uma segunda assinatura real no Mercado Pago se já existe uma
+    # pendente ou ativa em aberto (ex: usuário clicou "Assinar agora" duas vezes)
+    if usuario.mp_preapproval_id:
+        resp_existente = requests.get(
+            f"https://api.mercadopago.com/preapproval/{usuario.mp_preapproval_id}",
+            headers={"Authorization": f"Bearer {MP_ACCESS_TOKEN}"},
+            timeout=10,
+        )
+        if resp_existente.status_code == 200:
+            info_existente = resp_existente.json()
+            if info_existente.get("status") in ("pending", "authorized"):
+                return {"checkout_url": info_existente.get("init_point")}
+
     resp = requests.post(
         "https://api.mercadopago.com/preapproval",
         headers={"Authorization": f"Bearer {MP_ACCESS_TOKEN}", "Content-Type": "application/json"},
@@ -706,7 +721,8 @@ def criar_checkout_assinatura(db: Session = Depends(get_db), user=Depends(get_cu
     return {"checkout_url": dados.get("init_point")}
 
 @app.post("/assinatura/cancelar")
-def cancelar_assinatura(db: Session = Depends(get_db), user=Depends(get_current_user)):
+@limiter.limit("10/hour")
+def cancelar_assinatura(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     usuario = db.query(Usuario).filter(Usuario.id == user["dono_id"]).first()
     if not usuario.mp_preapproval_id:
         raise HTTPException(status_code=400, detail="Nenhuma assinatura ativa encontrada.")
@@ -723,6 +739,7 @@ def cancelar_assinatura(db: Session = Depends(get_db), user=Depends(get_current_
     return {"ok": True}
 
 @app.post("/webhooks/mercadopago")
+@limiter.limit("30/minute")
 def webhook_mercadopago(payload: dict, request: Request, db: Session = Depends(get_db),
                          x_signature: Optional[str] = Header(None, alias="x-signature"),
                          x_request_id: Optional[str] = Header(None, alias="x-request-id")):
