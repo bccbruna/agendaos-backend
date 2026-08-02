@@ -674,6 +674,42 @@ def obter_negocio_por_slug(slug: str, db: Session = Depends(get_db)):
         "aceita_agendamentos": assinatura_ativa(usuario),
     }
 
+@app.get("/meus-agendamentos")
+@limiter.limit("20/hour")
+def meus_agendamentos(telefone: str, slug: str, request: Request, db: Session = Depends(get_db)):
+    usuario = db.query(Usuario).filter(Usuario.slug == slug).first()
+    if not usuario:
+        raise HTTPException(status_code=404, detail="Negócio não encontrado")
+    cliente = db.query(Cliente).filter(Cliente.telefone == telefone, Cliente.dono_id == usuario.id).first()
+    if not cliente:
+        return []
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    agendamentos = db.query(Agendamento).filter(
+        Agendamento.cliente_id == cliente.id,
+        Agendamento.dono_id == usuario.id,
+        Agendamento.data >= hoje,
+        Agendamento.status != "cancelled",
+    ).order_by(Agendamento.data, Agendamento.hora).all()
+    return agendamentos
+
+@app.put("/agendamentos/{id}/cancelar-cliente")
+@limiter.limit("10/hour")
+def cancelar_agendamento_cliente(id: int, telefone: str, slug: str, request: Request, db: Session = Depends(get_db)):
+    usuario = db.query(Usuario).filter(Usuario.slug == slug).first()
+    if not usuario:
+        raise HTTPException(status_code=404, detail="Negócio não encontrado")
+    ag = db.query(Agendamento).filter(Agendamento.id == id, Agendamento.dono_id == usuario.id).first()
+    if not ag:
+        raise HTTPException(status_code=404, detail="Agendamento não encontrado")
+    cliente = db.query(Cliente).filter(Cliente.id == ag.cliente_id).first()
+    if not cliente or cliente.telefone != telefone:
+        raise HTTPException(status_code=403, detail="Telefone não confere com este agendamento")
+    if ag.status == "cancelled":
+        return {"ok": True}
+    ag.status = "cancelled"
+    db.commit()
+    return {"ok": True}
+
 # ── ASSINATURA ──────────────────────────────────────────────────
 @app.get("/assinatura")
 def obter_assinatura(db: Session = Depends(get_db), user=Depends(get_current_user)):
