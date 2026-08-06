@@ -95,6 +95,7 @@ class Usuario(Base):
     horario_abertura   = Column(String(5), nullable=True)
     horario_fechamento = Column(String(5), nullable=True)
     dias_funcionamento = Column(String(20), nullable=True)
+    instagram          = Column(String(100), nullable=True)
     assinatura_status       = Column(String(20), default="trial")
     trial_termina_em        = Column(DateTime, nullable=True)
     mp_preapproval_id       = Column(String(100), nullable=True)

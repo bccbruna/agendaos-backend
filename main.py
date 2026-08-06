@@ -251,6 +251,7 @@ garantir_coluna("profissionais", "dono_id", "INTEGER")
 garantir_coluna("usuarios", "horario_abertura", "VARCHAR(5)")
 garantir_coluna("usuarios", "horario_fechamento", "VARCHAR(5)")
 garantir_coluna("usuarios", "dias_funcionamento", "VARCHAR(20)")
+garantir_coluna("usuarios", "instagram", "VARCHAR(100)")
 garantir_coluna("usuarios", "assinatura_status", "VARCHAR(20)")
 garantir_coluna("usuarios", "trial_termina_em", "DATETIME")
 garantir_coluna("usuarios", "mp_preapproval_id", "VARCHAR(100)")
@@ -372,6 +373,7 @@ class ConfiguracoesSchema(BaseModel):
     horario_abertura: str
     horario_fechamento: str
     dias_funcionamento: str  # ex: "1,2,3,4,5,6" (0=domingo...6=sabado)
+    instagram: Optional[str] = ""
 
 def calcular_slots_ocupados(db: Session, dono_id: int, data: str, profissional_id: Optional[int] = None,
                              excluir_agendamento_id: Optional[int] = None):
@@ -672,6 +674,7 @@ def obter_negocio_por_slug(slug: str, db: Session = Depends(get_db)):
         "horario_fechamento": fechamento,
         "dias_funcionamento": dias,
         "aceita_agendamentos": assinatura_ativa(usuario),
+        "instagram": usuario.instagram or "",
     }
 
 @app.get("/meus-agendamentos")
@@ -828,11 +831,28 @@ def webhook_mercadopago(payload: dict, request: Request, db: Session = Depends(g
     return {"ok": True}
 
 # ── CONFIGURAÇÕES (horário de funcionamento) ───────────────────
+def normalizar_instagram(valor: str):
+    """Aceita @usuario, usuario, ou um link completo do instagram.com e devolve
+    só o nome de usuário limpo (ou None se vazio). Levanta ValueError se inválido."""
+    valor = (valor or "").strip()
+    if not valor:
+        return None
+    valor = re.sub(r"^https?://(www\.)?instagram\.com/", "", valor, flags=re.IGNORECASE)
+    valor = valor.strip("/").lstrip("@")
+    if not re.match(r"^[A-Za-z0-9._]{1,30}$", valor):
+        raise ValueError("Usuário do Instagram inválido.")
+    return valor
+
 @app.get("/configuracoes")
 def obter_configuracoes(db: Session = Depends(get_db), user=Depends(get_current_user)):
     usuario = db.query(Usuario).filter(Usuario.id == user["dono_id"]).first()
     abertura, fechamento, dias = config_horario(usuario)
-    return {"horario_abertura": abertura, "horario_fechamento": fechamento, "dias_funcionamento": dias}
+    return {
+        "horario_abertura": abertura,
+        "horario_fechamento": fechamento,
+        "dias_funcionamento": dias,
+        "instagram": usuario.instagram or "",
+    }
 
 @app.put("/configuracoes")
 def atualizar_configuracoes(c: ConfiguracoesSchema, db: Session = Depends(get_db), user=Depends(get_current_user)):
@@ -845,11 +865,16 @@ def atualizar_configuracoes(c: ConfiguracoesSchema, db: Session = Depends(get_db
     dias_informados = [d.strip() for d in c.dias_funcionamento.split(",") if d.strip()]
     if not dias_informados or not set(dias_informados).issubset(dias_validos):
         return {"ok": False, "erro": "Selecione ao menos um dia de funcionamento válido."}
+    try:
+        instagram = normalizar_instagram(c.instagram)
+    except ValueError:
+        return {"ok": False, "erro": "Usuário do Instagram inválido. Use só letras, números, pontos e underscore."}
 
     usuario = db.query(Usuario).filter(Usuario.id == user["dono_id"]).first()
     usuario.horario_abertura = c.horario_abertura
     usuario.horario_fechamento = c.horario_fechamento
     usuario.dias_funcionamento = ",".join(dias_informados)
+    usuario.instagram = instagram
     db.commit()
     return {"ok": True}
 
